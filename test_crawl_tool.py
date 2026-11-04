@@ -252,6 +252,105 @@ def test_saved_library_and_live_refresh():
             ct.save_settings = old_save
 
 
+def test_follow_logic():
+    sec = "MS4wLjABAAAATJPY7LAlaa5X-c8uNdWkvz0jUGgpw4eeXIwu_8BhvqE"
+    url = f"https://www.douyin.com/user/{sec}"
+    assert ct.parse_channel(url + "?from_tab_name=main") == ("dy", url, sec)
+    assert ct.parse_channel(sec) == ("dy", url, sec)
+    share = "长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/iABC123/"
+    assert ct.parse_channel(share, resolve=lambda u: f"https://www.iesdouyin.com/share/user/{sec}?u_code=1") == ("dy", url, sec)
+    for bad, resolver in (("https://v.douyin.com/x/", lambda u: "https://www.iesdouyin.com/share/video/1/"),
+                          ("https://www.youtube.com/@abc", None), ("", None)):
+        try:
+            ct.parse_channel(bad, resolve=resolver or (lambda u: ""))
+        except ValueError:
+            continue
+        raise AssertionError(f"phải báo lỗi: {bad}")
+
+    v = lambda i: {"key": f"dy_{i}", "url": f"https://www.douyin.com/video/{i}", "title": f"Tập {i} <b>", "published": i}
+    channels = {"dy_a": {"url": "A", "name": "Kênh <A>"}, "dy_b": {"url": "B", "name": "Kênh B"}}
+    # lần đầu: chỉ ghi nhận, không báo
+    assert ct.apply_check(channels, {"A": {"1": v(1), "2": v(2)}, "B": {}}, now=100) == {}
+    assert sorted(channels["dy_a"]["known"]) == ["1", "2"] and channels["dy_b"]["checked_at"] == 100
+    # lần sau: video 3 mới ở kênh A; kênh B lần này lỗi (không có trong kết quả) thì giữ nguyên
+    found = ct.apply_check(channels, {"A": {"2": v(2), "3": v(3)}}, now=200)
+    assert [i["key"] for i in found["dy_a"]] == ["dy_3"] and "dy_b" not in found
+    assert channels["dy_a"]["new"] == ["3"] and channels["dy_b"]["checked_at"] == 100
+    # kênh đã kiểm tra mà trước đó chưa có video nào: video đầu tiên vẫn được báo
+    found = ct.apply_check(channels, {"B": {"9": v(9)}}, now=300)
+    assert [i["key"] for i in found["dy_b"]] == ["dy_9"]
+
+    msgs = ct.telegram_messages({"dy_a": [v(3)]}, channels)
+    assert len(msgs) == 1 and "Kênh &lt;A&gt;" in msgs[0] and "Tập 3 &lt;b&gt;" in msgs[0] and 'href="https://www.douyin.com/video/3"' in msgs[0]
+    many = ct.telegram_messages({"dy_a": [v(i) for i in range(200)]}, channels, limit=1000)
+    assert len(many) > 1 and all(len(m) < 4096 for m in many)
+    for bad_token in ("", "abc", "123:short"):
+        try:
+            ct.telegram_call(bad_token, "getMe", {})
+        except ValueError:
+            continue
+        raise AssertionError("token sai định dạng phải bị chặn trước khi gọi mạng")
+
+
+def test_follow_check_end_to_end():
+    """Crawler giả ghi video vào creator_contents_*.jsonl như base, Telegram giả ghi lại tin nhắn."""
+    sec = "MS4wLjABAAAAfakechannel"
+    with tempfile.TemporaryDirectory() as tmp:
+        base, data = Path(tmp) / "base", Path(tmp) / "data"
+        base.mkdir()
+        counter = Path(tmp) / "round.txt"
+        counter.write_text("0")
+        (base / "run").write_text("\n".join([
+            "import json, sys, time, pathlib",
+            "argv = sys.argv",
+            "out = pathlib.Path(argv[argv.index('--save_data_path') + 1]) / 'douyin' / 'jsonl'",
+            "out.mkdir(parents=True, exist_ok=True)",
+            "creator = argv[argv.index('--creator_id') + 1]",
+            f"rnd = int(pathlib.Path(r'{counter}').read_text())",
+            "ids = ['1', '2'] + (['3'] if rnd else [])",
+            "with open(out / 'creator_contents_2026-11-04.jsonl', 'a', encoding='utf-8') as f:",
+            "    for i in ids:",
+            "        f.write(json.dumps({'aweme_id': i, 'title': 'Tập ' + i, 'aweme_url': 'https://www.douyin.com/video/' + i,",
+            "                            'source_creator': creator, 'last_modify_ts': int(time.time() * 1000)}) + '\\n')",
+            "print('creator mode', creator)",
+        ]), encoding="utf-8")
+        sent = []
+        old = ct.BASE_DIR, ct.uv_path, ct.save_settings, ct.telegram_call, ct.download_thumb
+        ct.BASE_DIR, ct.uv_path = base, lambda: sys.executable
+        ct.save_settings = lambda settings: None
+        ct.telegram_call = lambda token, method, params: sent.append((method, params)) or {}
+        ct.download_thumb = lambda item, data_dir: None
+        try:
+            api = ct.Api()
+            api._settings = {"data_dir": str(data), "telegram": {"token": ct.encrypt_token("1:x"), "chat_id": "42"}}
+            assert api.check_follows()["error"] == "Chưa theo dõi kênh nào"
+            res = api.follow_channel(f"https://www.douyin.com/user/{sec}", "Kênh thử")
+            assert res["channels"][0]["name"] == "Kênh thử"
+            assert api.follow_channel(sec)["error"]  # trùng
+
+            def run_check():
+                assert api.check_follows() == {"ok": True}
+                assert api.check_follows()["error"]  # đang bận
+                began = time.time()
+                while api._state != "idle" and time.time() - began < 20:
+                    time.sleep(0.1)
+
+            run_check()  # lần đầu: ghi nhận video 1, 2
+            assert api.follows()["channels"][0]["new"] == [] and sent == []
+            assert "--type creator" in " ".join(api._lines) and "--crawler_max_notes_count 18" in " ".join(api._lines)
+            counter.write_text("1")
+            time.sleep(1.1)  # lần sau ghi dòng mới có last_modify_ts mới hơn
+            run_check()  # video 3 mới
+            follow = api.follows()
+            assert follow["channels"][0]["new"] == ["3"]
+            assert sent and sent[0][0] == "sendMessage" and sent[0][1]["chat_id"] == "42" and "Tập 3" in sent[0][1]["text"]
+            assert api.mark_seen()["channels"][0]["new"] == []
+            assert api.set_follow_settings(None, 5, None)["error"] and api.set_follow_settings(False, 12, True)["settings"]["hours"] == 12
+            assert api.unfollow(follow["channels"][0]["key"])["channels"] == []
+        finally:
+            ct.BASE_DIR, ct.uv_path, ct.save_settings, ct.telegram_call, ct.download_thumb = old
+
+
 def test_old_form_migrates():
     api = ct.Api()
     api._settings = {"form": {"platform": "dy", "crawl_type": "search"}}
@@ -379,6 +478,8 @@ if __name__ == "__main__":
     test_gemini_keywords()
     test_parallel_crawl()
     test_saved_library_and_live_refresh()
+    test_follow_logic()
+    test_follow_check_end_to_end()
     test_old_form_migrates()
     test_parse()
     test_normalize_and_library()

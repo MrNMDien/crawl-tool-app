@@ -8,6 +8,7 @@ tải về máy ngay sau khi crawl vì link ảnh của CDN (nhất là Douyin) 
 """
 import base64
 import ctypes
+import html
 import io
 import json
 import os
@@ -453,6 +454,7 @@ def normalize(platform: str, row: dict):
         "published": parse_time(get("published")),
         "crawled": parse_time(row.get("last_modify_ts")),
         "keyword": str(row.get("source_keyword") or ""),
+        "source_creator": str(row.get("source_creator") or ""),  # link kênh người dùng theo dõi (chế độ creator)
         "author": str(row.get("nickname") or ""),
     }
 
@@ -517,7 +519,7 @@ def download_thumb(item: dict, data_dir: str):
 
 
 ITEM_FIELDS = ("key", "platform", "title", "url", "cover", "likes", "views", "comments", "shares",
-               "published", "crawled", "keyword", "author")
+               "published", "crawled", "keyword", "author", "source_creator")
 
 
 def library_file(data_dir: str) -> Path:
@@ -549,6 +551,157 @@ def results_signature(data_dir: str) -> tuple:
             st = path.stat()
             sig.append((str(path), st.st_size, st.st_mtime_ns))
     return tuple(sorted(sig))
+
+
+# ---------- Theo dõi kênh ----------
+
+# ponytail: mới làm Douyin (base đã có chế độ kênh nhẹ cho Douyin); nền tảng khác thêm khi base có tương tự
+FOLLOW_PLATFORMS = {"dy"}
+FOLLOW_MAX_VIDEOS = 18  # đúng 1 trang danh sách video của kênh Douyin: đủ để thấy video mới
+FOLLOW_HOURS = (1, 3, 6, 12, 24)
+DEFAULT_FOLLOW_SETTINGS = {"auto": True, "hours": 6, "headless": False, "last_check": 0}
+
+
+def follows_file(data_dir: str) -> Path:
+    return Path(data_dir) / "follows.json"
+
+
+def load_follows(data_dir: str) -> dict:
+    try:
+        data = json.loads(follows_file(data_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("url")} if isinstance(data, dict) else {}
+
+
+def write_follows(data_dir: str, channels: dict) -> None:
+    path = follows_file(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(channels, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def resolve_short_url(url: str) -> str:
+    """Link rút gọn v.douyin.com -> link thật (đọc header Location, không mở trang)."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        opener.open(urllib.request.Request(url, headers={"User-Agent": BROWSER_UA}), timeout=15)
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            return e.headers.get("Location", "")
+        raise
+    return ""
+
+
+def parse_channel(text: str, resolve=resolve_short_url) -> tuple:
+    """Link trang kênh (hoặc đoạn chia sẻ từ app Douyin) -> (nền tảng, link chuẩn, ID kênh)."""
+    text = str(text or "").strip()
+    match = re.search(r"douyin\.com/(?:share/)?user/(MS4wLjABAAAA[A-Za-z0-9_-]+)", text) or \
+        re.fullmatch(r"(MS4wLjABAAAA[A-Za-z0-9_-]+)", text)
+    if match:
+        sec_uid = match.group(1)
+        return "dy", f"https://www.douyin.com/user/{sec_uid}", sec_uid
+    short = re.search(r"https?://v\.douyin\.com/[A-Za-z0-9_-]+/?", text)
+    if short:
+        try:
+            target = resolve(short.group(0))
+        except (urllib.error.URLError, OSError) as e:
+            raise ValueError(f"Không mở được link rút gọn ({e}). Mở link trên trình duyệt rồi copy link trang kênh.") from None
+        if "/user/" in target:
+            return parse_channel(target, resolve=lambda u: "")
+        if "/video/" in target or "/note/" in target:
+            raise ValueError("Đây là link video, không phải link trang kênh. Trong Douyin, bấm vào avatar kênh rồi chia sẻ trang kênh.")
+        raise ValueError("Link rút gọn này không dẫn tới trang kênh nào (có thể đã hết hạn). Hãy copy lại link trang kênh.")
+    raise ValueError("Chưa nhận ra link kênh. Dán link dạng https://www.douyin.com/user/... hoặc link chia sẻ trang kênh từ app Douyin.")
+
+
+def collect_channel_videos(data_dir: str, since_ms: int) -> dict:
+    """Video lấy được ở lần kiểm tra vừa rồi, gom theo link kênh: {link kênh: {ID video: item}}."""
+    found = {}
+    for path in (Path(data_dir) / "douyin" / "jsonl").glob("creator_contents_*.jsonl"):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict) or not row.get("source_creator") or parse_time(row.get("last_modify_ts")) < since_ms // 1000:
+                    continue
+                item = normalize("dy", row)
+                if item:
+                    found.setdefault(row["source_creator"], {})[str(row.get("aweme_id"))] = item
+    return found
+
+
+def apply_check(channels: dict, videos_by_channel: dict, now: int) -> dict:
+    """So video vừa lấy với video đã biết của từng kênh. Trả về {key kênh: [video mới]}.
+
+    Lần kiểm tra đầu của một kênh chỉ ghi nhận video hiện có, không báo (tránh báo cả kênh là "mới").
+    Kênh không lấy được video (lỗi, bị chặn) thì giữ nguyên để lần sau so tiếp.
+    """
+    found = {}
+    for key, channel in channels.items():
+        videos = videos_by_channel.get(channel["url"])
+        if videos is None:
+            continue
+        known = set(channel.get("known", []))
+        new_ids = [vid for vid in videos if vid not in known]
+        if channel.get("checked_at") and new_ids:
+            channel["new"] = (channel.get("new", []) + new_ids)[-200:]
+            channel["last_new_at"] = now
+            found[key] = [videos[vid] for vid in new_ids]
+        channel["known"] = list(known | set(videos))[-3000:]
+        channel["checked_at"] = now
+    return found
+
+
+# ---------- Thông báo Telegram ----------
+
+TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
+
+
+def telegram_call(token: str, method: str, params: dict) -> object:
+    if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", token or ""):
+        raise ValueError("Bot token không đúng định dạng (dạng 123456789:AA...)")
+    req = urllib.request.Request(TELEGRAM_API.format(token=token, method=method), method="POST",
+                                 data=json.dumps(params).encode("utf-8"), headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:  # Telegram trả lỗi kèm mô tả trong body
+        try:
+            data = json.loads(e.read())
+        except ValueError:
+            data = {"description": f"HTTP {e.code}"}
+    if not data.get("ok"):
+        raise RuntimeError(f"Telegram báo lỗi: {data.get('description', 'không rõ')}")
+    return data["result"]
+
+
+def telegram_messages(found: dict, channels: dict, limit: int = 3500) -> list:
+    """Tin nhắn HTML liệt kê video mới theo kênh; tách nhiều tin nếu dài (Telegram giới hạn 4096 ký tự)."""
+    total = sum(len(v) for v in found.values())
+    lines = [f"🎬 <b>{total} video mới</b> từ kênh đang theo dõi"]
+    for key, videos in found.items():
+        lines.append(f"\n<b>{html.escape(channels[key].get('name') or 'Kênh')}</b> ({len(videos)} video)")
+        for v in sorted(videos, key=lambda x: x.get("published", 0), reverse=True):
+            title = html.escape((v.get("title") or "(không có tiêu đề)")[:120])
+            link = f'<a href="{html.escape(v["url"], quote=True)}">{title}</a>' if v.get("url") else title
+            lines.append(f"• {link}")
+    # tách theo từng dòng (không cắt giữa thẻ HTML), mỗi tin dưới giới hạn
+    messages, current = [], ""
+    for line in lines:
+        if current and len(current) + len(line) + 1 > limit:
+            messages.append(current)
+            current = ""
+        current += line + "\n"
+    return messages + [current]
 
 
 def thumb_data_uri(path: Path) -> str:
@@ -653,6 +806,7 @@ class Api:
         self._lib_rev = 0
         self._sig = None
         self._sig_checked = 0.0
+        self._follow_lock = threading.Lock()
         self._window = None
 
     # --- tiện ích nội bộ ---
@@ -755,6 +909,204 @@ class Api:
         with ThreadPoolExecutor(max_workers=8) as pool:
             ok = sum(1 for p in pool.map(lambda i: download_thumb(i, data_dir), todo) if p)
         self._write(f"Đã tải {ok}/{len(todo)} ảnh bìa.")
+
+    # --- theo dõi kênh ---
+    def _follow_settings(self) -> dict:
+        saved = self._settings.get("follow") if isinstance(self._settings.get("follow"), dict) else {}
+        return {**DEFAULT_FOLLOW_SETTINGS, **saved}
+
+    def _telegram_token(self) -> str:
+        blob = (self._settings.get("telegram") or {}).get("token")
+        try:
+            return decrypt_token(blob) if blob else ""
+        except (OSError, ValueError):
+            return ""
+
+    def _notify_telegram(self, found: dict, channels: dict) -> None:
+        tg = self._settings.get("telegram") or {}
+        token = self._telegram_token()
+        if not (tg.get("enabled", True) and token and tg.get("chat_id")):
+            return
+        try:
+            for text in telegram_messages(found, channels):
+                telegram_call(token, "sendMessage", {"chat_id": tg["chat_id"], "text": text, "parse_mode": "HTML",
+                                                     "disable_web_page_preview": True})
+            self._write("Đã gửi thông báo Telegram.")
+        except (ValueError, RuntimeError, urllib.error.URLError, OSError) as e:
+            self._write(f"[LỖI] Không gửi được Telegram: {e}")
+
+    def _follow_worker(self, channels: dict, settings: dict) -> None:
+        started_ms = int(time.time() * 1000)
+        data_dir = self._data_dir()
+        try:
+            login = self._login()
+            values = {
+                "platform": "dy", "crawl_type": "creator", "targets": "\n".join(c["url"] for c in channels.values()),
+                "login": login["type"], "max_notes": FOLLOW_MAX_VIDEOS, "max_comments": 1, "comments": False,
+                "media": False, "headless": settings["headless"],
+            }
+            if login["type"] == "cookie":
+                values["cookies"] = self._cookies().get("dy", "")
+            args = build_args(values, data_dir)
+            self._write("─" * 60)
+            self._write(f"Kiểm tra {len(channels)} kênh theo dõi (mỗi kênh {FOLLOW_MAX_VIDEOS} video mới nhất): "
+                        + " ".join(redact_args(args)))
+            code = self._run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *args],
+                                    current_base(self._settings), "Theo dõi", "[Theo dõi] ")
+            if code != 0:
+                self._write(f"[LỖI] [Theo dõi] Crawler dừng với mã {code}; kênh nào đã lấy được vẫn được so sánh.")
+            with self._follow_lock:
+                all_channels = load_follows(data_dir)
+                found = apply_check(all_channels, collect_channel_videos(data_dir, started_ms), int(time.time()))
+                write_follows(data_dir, all_channels)
+            total = sum(len(v) for v in found.values())
+            self._write(f"Có {total} video mới từ kênh theo dõi." if total else "Kênh theo dõi chưa có video mới.")
+            if found:
+                self._notify_telegram(found, all_channels)
+                self._prefetch_thumbs()
+        except Exception as e:  # noqa: BLE001
+            self._write(f"[LỖI] Kiểm tra kênh theo dõi thất bại: {e}")
+        finally:
+            self._settings["follow"] = {**self._follow_settings(), "last_check": int(time.time())}
+            save_settings(self._settings)
+            self._state = "idle"
+            self._lib_rev += 1
+
+    def _scheduler(self) -> None:
+        """Chạy nền khi app mở: đến giờ thì tự kiểm tra kênh theo dõi (app đang bận thì đợi)."""
+        while True:
+            time.sleep(60)
+            settings = self._follow_settings()
+            due = time.time() - settings["last_check"] >= settings["hours"] * 3600
+            if settings["auto"] and due and self._state == "idle" and load_follows(self._data_dir()):
+                self.check_follows()
+
+    def follows(self) -> dict:
+        channels = load_follows(self._data_dir())
+        tg = self._settings.get("telegram") or {}
+        settings = self._follow_settings()
+        return {
+            "channels": [{"key": k, "platform": c.get("platform"), "url": c["url"], "name": c.get("name", ""),
+                          "added_at": c.get("added_at", 0), "checked_at": c.get("checked_at", 0),
+                          "new": c.get("new", [])} for k, c in channels.items()],
+            "settings": {**settings, "next_check": settings["last_check"] + settings["hours"] * 3600},
+            "telegram": {"has_token": bool(tg.get("token")), "chat_id": tg.get("chat_id", ""),
+                         "chat_name": tg.get("chat_name", ""), "enabled": tg.get("enabled", True)},
+            "hours_options": list(FOLLOW_HOURS),
+        }
+
+    def follow_channel(self, text, name="") -> dict:
+        try:
+            platform, url, channel_id = parse_channel(text)
+        except ValueError as e:
+            return {"error": str(e)}
+        key = f"{platform}_{safe_key(channel_id)}"
+        with self._follow_lock:
+            channels = load_follows(self._data_dir())
+            if key in channels:
+                return {"error": "Kênh này đã có trong danh sách theo dõi"}
+            channels[key] = {"platform": platform, "url": url, "name": str(name or "").strip()[:60] or f"Kênh Douyin …{channel_id[-6:]}",
+                             "added_at": int(time.time()), "known": [], "new": []}
+            write_follows(self._data_dir(), channels)
+        return self.follows()
+
+    def unfollow(self, key) -> dict:
+        with self._follow_lock:
+            channels = load_follows(self._data_dir())
+            channels.pop(key, None)
+            write_follows(self._data_dir(), channels)
+        return self.follows()
+
+    def rename_channel(self, key, name) -> dict:
+        with self._follow_lock:
+            channels = load_follows(self._data_dir())
+            if key in channels and str(name or "").strip():
+                channels[key]["name"] = str(name).strip()[:60]
+                write_follows(self._data_dir(), channels)
+        return self.follows()
+
+    def mark_seen(self, key=None) -> dict:
+        with self._follow_lock:
+            channels = load_follows(self._data_dir())
+            for k, channel in channels.items():
+                if key in (None, k):
+                    channel["new"] = []
+            write_follows(self._data_dir(), channels)
+        return self.follows()
+
+    def set_follow_settings(self, auto=None, hours=None, headless=None) -> dict:
+        settings = self._follow_settings()
+        if auto is not None:
+            settings["auto"] = bool(auto)
+        if hours is not None:
+            if int(hours) not in FOLLOW_HOURS:
+                return {"error": "Chu kỳ kiểm tra không hợp lệ"}
+            settings["hours"] = int(hours)
+        if headless is not None:
+            settings["headless"] = bool(headless)
+        self._settings["follow"] = settings
+        save_settings(self._settings)
+        return self.follows()
+
+    def check_follows(self) -> dict:
+        if self._state != "idle":
+            return {"error": "App đang bận, đợi xong rồi thử lại."}
+        if not current_base(self._settings):
+            return {"error": "Chưa có base code. Vào tab Cài đặt → Kiểm tra cập nhật."}
+        channels = {k: c for k, c in load_follows(self._data_dir()).items() if c.get("platform") in FOLLOW_PLATFORMS}
+        if not channels:
+            return {"error": "Chưa theo dõi kênh nào"}
+        self._state = "following"
+        threading.Thread(target=self._follow_worker, args=(channels, self._follow_settings()), daemon=True).start()
+        return {"ok": True}
+
+    # --- Telegram ---
+    def set_telegram(self, token=None, enabled=None, clear=False) -> dict:
+        tg = dict(self._settings.get("telegram") or {})
+        if clear:
+            tg = {}
+        elif token and str(token).strip():
+            token = str(token).strip()
+            try:
+                bot = telegram_call(token, "getMe", {})
+            except (ValueError, RuntimeError, urllib.error.URLError, OSError) as e:
+                return {"error": f"Không kiểm tra được bot: {e}"}
+            tg.update({"token": encrypt_token(token), "bot_name": bot.get("username", ""), "chat_id": "", "chat_name": ""})
+        if enabled is not None:
+            tg["enabled"] = bool(enabled)
+        self._settings["telegram"] = tg
+        save_settings(self._settings)
+        return self.follows()
+
+    def telegram_detect_chat(self) -> dict:
+        """Tìm chat của người dùng: người dùng nhắn bất kỳ tin gì cho bot trước, app đọc tin mới nhất."""
+        token = self._telegram_token()
+        if not token:
+            return {"error": "Chưa nhập bot token"}
+        try:
+            updates = telegram_call(token, "getUpdates", {"limit": 50})
+        except (ValueError, RuntimeError, urllib.error.URLError, OSError) as e:
+            return {"error": str(e)}
+        chats = [u["message"]["chat"] for u in updates if isinstance(u, dict) and isinstance(u.get("message"), dict)]
+        if not chats:
+            bot = (self._settings.get("telegram") or {}).get("bot_name", "")
+            return {"error": f"Chưa thấy tin nhắn nào. Mở Telegram, nhắn /start cho bot @{bot} rồi bấm lại."}
+        chat = chats[-1]
+        name = chat.get("title") or " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])) or chat.get("username", "")
+        self._settings["telegram"] = {**(self._settings.get("telegram") or {}), "chat_id": str(chat["id"]), "chat_name": name}
+        save_settings(self._settings)
+        return self.follows()
+
+    def telegram_test(self) -> dict:
+        tg = self._settings.get("telegram") or {}
+        token = self._telegram_token()
+        if not (token and tg.get("chat_id")):
+            return {"error": "Cần nhập bot token và lấy chat ID trước"}
+        try:
+            telegram_call(token, "sendMessage", {"chat_id": tg["chat_id"], "text": "✅ CrawlTool đã kết nối. Khi kênh theo dõi có video mới, bot sẽ nhắn ở đây."})
+        except (ValueError, RuntimeError, urllib.error.URLError, OSError) as e:
+            return {"error": str(e)}
+        return {"ok": True}
 
     def _on_closed(self) -> None:
         self.stop()
@@ -1048,6 +1400,7 @@ def main() -> None:
     )
     api._window = window
     window.events.closed += api._on_closed
+    threading.Thread(target=api._scheduler, daemon=True).start()
     webview.start()
 
 

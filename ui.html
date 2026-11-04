@@ -120,7 +120,7 @@
   .switch .text b { font-weight: 600; }
 
   /* ---------- Tab Crawl: form bên trái, kết quả bên phải ---------- */
-  #view-crawl, #view-library { gap: 16px; padding: 16px; }
+  #view-crawl, #view-library, #view-follow { gap: 16px; padding: 16px; }
   .form-panel { width: 360px; flex: none; display: flex; flex-direction: column; overflow: hidden; }
   .form-scroll { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
   .form-foot { padding: 12px 18px; border-top: 1px solid var(--border); display: flex; gap: 8px; }
@@ -212,6 +212,17 @@
   .setting code { font: 12.5px Consolas, monospace; background: var(--hover); padding: 2px 6px; border-radius: 5px; word-break: break-all; }
   .setting .acts { display: flex; gap: 8px; flex: none; }
   .setting.col { flex-direction: column; align-items: stretch; gap: 14px; }
+  .channel-list { display: flex; flex-direction: column; gap: 8px; }
+  .channel { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .channel .top { display: flex; align-items: center; gap: 8px; }
+  .channel .top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .channel .sub { font-size: 12px; color: var(--faint); }
+  .channel .acts { display: flex; gap: 6px; }
+  .chip.new { background: var(--accent); color: var(--accent-ink); }
+  .row-inline { display: flex; align-items: center; gap: 8px; }
+  .row-inline select { width: auto; }
+  .tg-steps { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+  .tg-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
   .setting .head { display: flex; align-items: center; gap: 18px; }
   .cookie-list { display: flex; flex-direction: column; gap: 8px; }
   .cookie-row { display: grid; grid-template-columns: 130px 86px 1fr auto auto; gap: 8px; align-items: center; }
@@ -265,6 +276,7 @@
   <nav>
     <button data-tab="crawl" class="active"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>Crawl</button>
     <button data-tab="library"><svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z"/></svg>Thư viện <span class="count" id="lib-count">0</span></button>
+    <button data-tab="follow"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>Theo dõi <span class="count" id="follow-count">0</span></button>
     <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>Cài đặt</button>
   </nav>
   <div class="spacer"></div>
@@ -328,6 +340,35 @@
     <div class="card panel" id="library"></div>
   </section>
 
+  <!-- ===== Tab Theo dõi kênh ===== -->
+  <section class="view" id="view-follow">
+    <div class="card form-panel">
+      <div class="form-scroll">
+        <div class="section-title">Thêm kênh</div>
+        <label class="field"><span class="label">Link trang kênh Douyin</span>
+          <input type="text" id="fl-url" placeholder="Dán link kênh hoặc đoạn chia sẻ từ app Douyin" spellcheck="false"></label>
+        <label class="field"><span class="label">Tên gợi nhớ (không bắt buộc)</span><input type="text" id="fl-name" placeholder="VD: Kênh phim AI cổ trang"></label>
+        <button class="btn primary" id="fl-add" type="button">+ Theo dõi kênh</button>
+        <span class="hint">App Douyin: mở trang kênh → ⋯ → Chia sẻ → Sao chép liên kết. Lần kiểm tra đầu chỉ ghi nhận video hiện có; từ lần sau mới báo video mới.</span>
+
+        <div class="section-title">Kiểm tra</div>
+        <div>
+          <label class="switch"><span class="text"><b>Tự kiểm tra khi app đang mở</b><span class="hint" id="fl-next">—</span></span><input type="checkbox" id="fl-auto"><span class="track"></span></label>
+          <div class="row-inline" style="padding: 4px 0 10px"><span class="label">Mỗi</span><select id="fl-hours"></select><span class="label">giờ một lần</span></div>
+          <label class="switch"><span class="text"><b>Chạy ẩn trình duyệt khi kiểm tra</b><span class="hint">Không bật cửa sổ Chrome; cần đã đăng nhập Douyin trước</span></span><input type="checkbox" id="fl-headless"><span class="track"></span></label>
+        </div>
+        <div class="login-line">Thông báo: <b id="fl-tg">—</b> · <button class="link" id="fl-tg-settings" type="button">cài Telegram</button></div>
+
+        <div class="section-title">Kênh đang theo dõi (<span id="fl-count">0</span>)</div>
+        <div class="channel-list" id="fl-list"></div>
+      </div>
+      <div class="form-foot">
+        <button class="btn primary lg" id="fl-check" type="button">Kiểm tra ngay</button>
+      </div>
+    </div>
+    <div class="card panel" id="follow-gallery"></div>
+  </section>
+
   <!-- ===== Tab Cài đặt ===== -->
   <section class="view" id="view-settings">
     <div class="settings">
@@ -338,6 +379,25 @@
         <p class="hint" id="login-hint"></p>
         <div class="cookie-list" id="cookie-list"></div>
         <div class="cookie-list" id="session-list"></div>
+      </div>
+      <div class="card setting col" id="tg-card">
+        <div class="head"><div class="info"><h3>Thông báo Telegram <span class="chip" id="tg-status">chưa cài</span></h3>
+          <p>Khi kênh đang theo dõi có video mới, bot Telegram nhắn cho bạn kèm link video. Token lưu mã hóa trên máy này.</p></div></div>
+        <ol class="tg-steps">
+          <li>Trong Telegram, nhắn <b>@BotFather</b> → <code>/newbot</code> → đặt tên → copy <b>bot token</b>.</li>
+          <li>Dán token vào ô dưới, bấm <b>Lưu</b>.</li>
+          <li>Mở bot vừa tạo, bấm <b>Start</b> (hoặc nhắn bất kỳ), rồi bấm <b>Lấy chat ID</b>.</li>
+          <li>Bấm <b>Gửi thử</b> để kiểm tra.</li>
+        </ol>
+        <div class="tg-row"><input type="password" id="tg-token" placeholder="Bot token (dạng 123456789:AA...)" autocomplete="off"><button class="btn" id="tg-save">Lưu</button></div>
+        <div class="row-inline">
+          <button class="btn sm" id="tg-chat">Lấy chat ID</button>
+          <button class="btn sm" id="tg-test">Gửi thử</button>
+          <span class="hint" id="tg-chat-info"></span>
+          <div class="spacer"></div>
+          <button class="link" id="tg-clear" type="button">Xóa cài đặt Telegram</button>
+        </div>
+        <label class="switch"><span class="text"><b>Gửi thông báo video mới qua Telegram</b></span><input type="checkbox" id="tg-enabled"><span class="track"></span></label>
       </div>
       <div class="card setting col">
         <div class="head"><div class="info"><h3>Gemini API <span class="chip" id="gem-status">chưa có key</span></h3>
@@ -503,14 +563,15 @@ function showTab(name) {
 document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 
 // ---------- Lưới video dùng chung ----------
-// mode "results": kết quả crawl (có lọc lần crawl gần nhất); mode "library": video đã lưu vào thư viện.
+// mode "results": kết quả crawl (có lọc lần crawl gần nhất); "library": video đã lưu vào thư viện;
+// "follow": video mới từ kênh đang theo dõi.
 function createGallery(root, mode) {
   const g = { items: [], shown: PAGE };
-  const isLib = mode === "library";
+  const isLib = mode === "library", isFollow = mode === "follow", noScope = isLib || isFollow;
 
   const bar = el("div", "toolbar");
   const title = el("h2");
-  title.append(isLib ? "Thư viện" : "Kết quả");
+  title.append(isLib ? "Thư viện" : isFollow ? "Video mới từ kênh theo dõi" : "Kết quả");
   const live = el("span", "live", "đang cập nhật");
   live.hidden = true;
   title.append(live);
@@ -522,17 +583,24 @@ function createGallery(root, mode) {
   search.append(q);
   const scope = el("select");
   scope.append(new Option("Lần crawl gần nhất", "last"), new Option("Tất cả đã crawl", "all"));
-  scope.hidden = isLib;
+  scope.hidden = noScope;
   const fPlatform = el("select"), fKeyword = el("select"), fSort = el("select");
   const sorts = [["likes", "Nhiều like nhất"], ["views", "Nhiều view nhất"], ["comments", "Nhiều bình luận nhất"],
     ["shares", "Nhiều chia sẻ nhất"], ["published", "Mới đăng nhất"], ["crawled", "Mới crawl nhất"]];
   if (isLib) sorts.unshift(["saved_at", "Mới lưu nhất"]);
+  if (isFollow) sorts.unshift(sorts.splice(4, 1)[0]);  // video mới: mặc định mới đăng nhất
   for (const [v, t] of sorts) fSort.append(new Option(t, v));
   const total = el("span", "total");
   const reload = iconEl("button", "btn sm icon", "reload");
   reload.title = "Làm mới";
   reload.onclick = () => loadData();
-  bar.append(title, search, scope, fPlatform, fKeyword, fSort, total, el("div", "spacer"), reload);
+  bar.append(title, search, scope, fPlatform, fKeyword, fSort, total, el("div", "spacer"));
+  if (isFollow) {
+    const seen = el("button", "btn sm", "Đánh dấu đã xem hết");
+    seen.onclick = async () => { renderFollows(await api().mark_seen(null)); toast("Đã đánh dấu đã xem"); };
+    bar.append(seen);
+  }
+  bar.append(reload);
 
   const wrap = el("div", "grid-wrap");
   const grid = el("div", "grid");
@@ -556,7 +624,7 @@ function createGallery(root, mode) {
 
   function inScope(i) {
     // chưa có lần crawl nào bằng bản này thì hiện tất cả
-    return isLib || scope.value === "all" || !state.lastRun || i.crawled >= state.lastRun - 5;
+    return noScope || scope.value === "all" || !state.lastRun || i.crawled >= state.lastRun - 5;
   }
   function fillSelect(select, allLabel, options) {
     const keep = select.value;
@@ -583,10 +651,15 @@ function createGallery(root, mode) {
     total.textContent = list.length === scoped.length ? `${list.length} video` : `${list.length} / ${scoped.length} video`;
     more.hidden = list.length <= g.shown;
     empty.hidden = list.length > 0;
-    live.hidden = isLib || state.busyState !== "crawling";
+    live.hidden = isLib || state.busyState !== (isFollow ? "following" : "crawling");
     if (scoped.length) {
       emptyTitle.textContent = "Không có video khớp bộ lọc";
       emptyText.textContent = "Thử bỏ bớt bộ lọc hoặc đổi từ khóa tìm.";
+    } else if (isFollow) {
+      emptyTitle.textContent = "Chưa có video mới";
+      emptyText.textContent = state.follow?.channels?.length
+        ? "Khi kênh đang theo dõi đăng video mới, video sẽ hiện ở đây."
+        : "Dán link trang kênh Douyin ở bên trái để bắt đầu theo dõi.";
     } else if (isLib) {
       emptyTitle.textContent = "Thư viện trống";
       emptyText.textContent = "Ở tab Crawl, bấm ☆ Lưu ở video bạn ưng để thêm vào đây.";
@@ -654,7 +727,8 @@ function card(item) {
     stats.append(s);
   }
   if (stats.childElementCount) body.append(stats);
-  const meta = [item.author, fmtDate(item.published), item.keyword && "#" + item.keyword].filter(Boolean).join(" · ");
+  const channel = state.channelNames?.[item.source_creator];
+  const meta = [channel || item.author, fmtDate(item.published), item.keyword && "#" + item.keyword].filter(Boolean).join(" · ");
   body.append(el("div", "meta", meta));
 
   const acts = el("div", "vactions");
@@ -678,14 +752,126 @@ function card(item) {
 
 const results = createGallery($("results"), "results");
 const library = createGallery($("library"), "library");
+const followGallery = createGallery($("follow-gallery"), "follow");
 
 async function loadData() {
-  const data = await api().library();
+  const [data, follow] = await Promise.all([api().library(), api().follows()]);
   state.lastRun = data.last_run;
+  state.allItems = data.items;
   results.setItems(data.items);
   library.setItems(data.saved);
   $("lib-count").textContent = data.saved.length;
+  renderFollows(follow);
 }
+
+// ---------- Theo dõi kênh ----------
+function renderFollows(f) {
+  const before = state.follow ? state.follow.channels.reduce((n, c) => n + c.new.length, 0) : null;
+  state.follow = f;
+  state.channelNames = Object.fromEntries(f.channels.map((c) => [c.url, c.name]));
+  const newKeys = new Set(f.channels.flatMap((c) => c.new.map((id) => `${c.platform}_${id}`)));
+  const totalNew = newKeys.size;
+  $("follow-count").textContent = totalNew;
+  $("follow-count").classList.toggle("new", totalNew > 0);
+  if (before !== null && totalNew > before) toast(`Có ${totalNew - before} video mới từ kênh theo dõi`);
+  followGallery.setItems((state.allItems || []).filter((i) => newKeys.has(i.key)));
+
+  $("fl-count").textContent = f.channels.length;
+  const list = $("fl-list");
+  list.replaceChildren(...f.channels.map((c) => {
+    const box = el("div", "channel");
+    const top = el("div", "top");
+    const dot = el("span", "pdot");
+    dot.style.background = PLATFORMS[c.platform]?.color || "#666";
+    top.append(dot, el("b", "", c.name));
+    if (c.new.length) top.append(el("span", "chip new", `${c.new.length} mới`));
+    const sub = el("div", "sub", c.checked_at ? `Kiểm tra lúc ${new Date(c.checked_at * 1000).toLocaleString("vi-VN")}` : "Chưa kiểm tra lần nào");
+    const acts = el("div", "acts");
+    const open = el("button", "btn sm", "Mở kênh");
+    open.onclick = () => api().open_url(c.url);
+    acts.append(open);
+    if (c.new.length) {
+      const seen = el("button", "btn sm", "Đã xem");
+      seen.onclick = async () => renderFollows(await api().mark_seen(c.key));
+      acts.append(seen);
+    }
+    const del = el("button", "btn sm danger", "Bỏ theo dõi");
+    del.onclick = async () => {
+      if (await confirmBox(`Bỏ theo dõi ${c.name}?`, "App sẽ không kiểm tra kênh này nữa.")) renderFollows(await api().unfollow(c.key));
+    };
+    acts.append(del);
+    box.append(top, sub, acts);
+    return box;
+  }));
+  if (!f.channels.length) list.append(el("div", "hint", "Chưa theo dõi kênh nào."));
+
+  const st = f.settings;
+  $("fl-auto").checked = st.auto;
+  $("fl-headless").checked = st.headless;
+  const hours = $("fl-hours");
+  if (!hours.options.length) for (const h of f.hours_options) hours.append(new Option(String(h), String(h)));
+  hours.value = String(st.hours);
+  $("fl-next").textContent = !st.auto ? "Đang tắt: chỉ kiểm tra khi bấm Kiểm tra ngay"
+    : st.last_check ? `Lần tới khoảng ${new Date(st.next_check * 1000).toLocaleString("vi-VN")}` : "Sẽ kiểm tra trong vòng 1 phút";
+  renderTelegram(f.telegram);
+}
+$("fl-add").onclick = async () => {
+  const btn = $("fl-add");
+  btn.disabled = true;
+  try {
+    const res = await api().follow_channel($("fl-url").value, $("fl-name").value);
+    if (res.error) return toast(res.error, true);
+    $("fl-url").value = "";
+    $("fl-name").value = "";
+    renderFollows(res);
+    toast("Đã theo dõi kênh. Bấm Kiểm tra ngay để ghi nhận video hiện có.");
+  } finally {
+    btn.disabled = false;
+  }
+};
+$("fl-url").onkeydown = (e) => e.key === "Enter" && $("fl-add").click();
+$("fl-check").onclick = async () => {
+  const res = await api().check_follows();
+  if (res.error) return toast(res.error, true);
+  $("logbox").classList.add("open");
+  toast("Đang kiểm tra kênh theo dõi, xem tiến độ ở Nhật ký (tab Crawl)");
+};
+$("fl-auto").onchange = async () => renderFollows(await api().set_follow_settings($("fl-auto").checked, null, null));
+$("fl-hours").onchange = async () => renderFollows(await api().set_follow_settings(null, Number($("fl-hours").value), null));
+$("fl-headless").onchange = async () => renderFollows(await api().set_follow_settings(null, null, $("fl-headless").checked));
+$("fl-tg-settings").onclick = () => { showTab("settings"); $("tg-card").scrollIntoView({ behavior: "smooth" }); };
+
+// ---------- Cài đặt: Telegram ----------
+function renderTelegram(tg) {
+  const ready = tg.has_token && tg.chat_id;
+  const label = !tg.has_token ? "chưa cài" : !tg.chat_id ? "chưa lấy chat ID" : tg.enabled ? "đang bật" : "đang tắt";
+  $("tg-status").textContent = label;
+  $("tg-status").className = "chip" + (ready && tg.enabled ? " ok" : "");
+  $("fl-tg").textContent = ready && tg.enabled ? `Telegram (${tg.chat_name || tg.chat_id})` : `Telegram ${label}`;
+  $("tg-chat-info").textContent = tg.chat_id ? `Gửi tới: ${tg.chat_name || tg.chat_id}` : "";
+  $("tg-token").placeholder = tg.has_token ? "Đã lưu token (dán token mới để thay)" : "Bot token (dạng 123456789:AA...)";
+  $("tg-chat").disabled = !tg.has_token;
+  $("tg-test").disabled = !ready;
+  $("tg-clear").hidden = !tg.has_token;
+  $("tg-enabled").checked = tg.enabled;
+}
+async function tgAction(promise, okMsg) {
+  const res = await promise;
+  if (res.error) return toast(res.error, true);
+  if (res.channels) renderFollows(res);
+  if (okMsg) toast(okMsg);
+}
+$("tg-save").onclick = async () => {
+  if (!$("tg-token").value.trim()) return toast("Chưa dán bot token", true);
+  await tgAction(api().set_telegram($("tg-token").value, null, false), "Đã lưu bot. Giờ nhắn Start cho bot rồi bấm Lấy chat ID.");
+  $("tg-token").value = "";
+};
+$("tg-chat").onclick = () => tgAction(api().telegram_detect_chat(), "Đã lấy chat ID");
+$("tg-test").onclick = () => tgAction(api().telegram_test(), "Đã gửi tin thử, mở Telegram để xem");
+$("tg-enabled").onchange = () => tgAction(api().set_telegram(null, $("tg-enabled").checked, false));
+$("tg-clear").onclick = async () => {
+  if (await confirmBox("Xóa cài đặt Telegram?", "Xóa bot token và chat ID đã lưu trên máy này.")) tgAction(api().set_telegram(null, null, true), "Đã xóa cài đặt Telegram");
+};
 async function toggleSave(key) {
   const saved = library.items.some((i) => i.key === key);
   const res = saved ? await api().remove_video(key) : await api().save_video(key);
@@ -809,22 +995,23 @@ function appendLog(lines) {
 }
 
 // ---------- Trạng thái ----------
-const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl" };
+const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl", following: "Đang kiểm tra kênh theo dõi" };
 function applyState(s) {
-  const wasCrawling = state.busyState === "crawling";
+  const wasCrawling = state.busyState === "crawling" || state.busyState === "following";
   state.busyState = s.state;
   $("status").classList.toggle("busy", s.state !== "idle");
   $("status-text").textContent = s.state === "crawling" && s.running.length
     ? "Đang crawl: " + s.running.join(", ") : STATUS[s.state] || s.state;
   $("btn-start").disabled = s.state !== "idle";
-  $("btn-stop").disabled = s.state !== "crawling";
+  $("btn-stop").disabled = s.state !== "crawling" && s.state !== "following";
+  $("fl-check").disabled = s.state !== "idle";
   $("btn-update").disabled = s.state !== "idle";
   $("base-tag").textContent = "base: " + (s.base || "chưa cài");
   $("base-ver").textContent = s.base || "chưa cài";
   if (s.lib_rev !== state.libRev) {
     state.libRev = s.lib_rev;
     loadData();
-  } else if (wasCrawling !== (s.state === "crawling")) results.render();
+  } else if (wasCrawling !== (s.state === "crawling" || s.state === "following")) { results.render(); followGallery.render(); }
 }
 async function pollLoop() {
   try {

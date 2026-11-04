@@ -31,7 +31,9 @@ Các bước:
 2. Lần mở đầu tiên, app hỏi token rồi tải base code. Lần này mất vài phút vì phải tải Python và thư viện.
 3. Nhập từ khóa và bấm **Bắt đầu crawl**. Xem kết quả ở tab **Thư viện video**. File gốc lưu ở `Documents\CrawlTool`; đổi chỗ lưu trong tab *Cài đặt*.
 
-App lưu dữ liệu của nó ở `%LOCALAPPDATA%\CrawlTool`: base code, venv và `settings.json`. Token trong `settings.json` được mã hóa bằng DPAPI của Windows, nên chỉ chính tài khoản Windows đó giải mã được.
+App lưu dữ liệu của nó ở `%LOCALAPPDATA%\CrawlTool`: base code (mỗi phiên bản một thư mục `base-<sha>`, nên cập nhật không bị khóa file), venv, `browser_data` (hồ sơ Chrome + phiên đăng nhập, nằm ngoài base nên cập nhật không mất) và `settings.json`.
+
+**Phiên đăng nhập:** đăng nhập thành công lần đầu thì base ghi dấu `<nền tảng>.logged_in`. Lần sau nếu nền tảng báo phiên không còn hợp lệ, crawler **dừng và không tự đăng nhập lại** (đăng nhập lặp dễ bị khóa tài khoản vì nghi bot). Kiểm tra tài khoản rồi vào Cài đặt → Đăng nhập → **Đăng nhập lại** cho nền tảng đó. Token trong `settings.json` được mã hóa bằng DPAPI của Windows, nên chỉ chính tài khoản Windows đó giải mã được.
 
 Muốn gỡ app: tab *Cài đặt → Gỡ cài đặt*. App sẽ xóa chính nó, base code và token, còn thư mục kết quả được giữ lại.
 

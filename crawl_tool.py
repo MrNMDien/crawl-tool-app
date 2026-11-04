@@ -31,7 +31,8 @@ BASE_REPO = "MrNMDien/MediaCrawler"
 BASE_BRANCH = "main"
 
 APP_HOME = Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP_NAME
-BASE_DIR = APP_HOME / "base"
+BASE_DIR = APP_HOME / "base"  # chỗ cài base của bản app cũ; bản mới cài vào base-<sha>
+BROWSER_DATA_DIR = APP_HOME / "browser_data"  # hồ sơ Chrome + file đánh dấu đã đăng nhập
 VENV_DIR = APP_HOME / "venv"
 SETTINGS_FILE = APP_HOME / "settings.json"
 INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Programs" / APP_NAME
@@ -145,17 +146,62 @@ def extract_zipball(zip_bytes: bytes, dest: Path) -> None:
         shutil.move(str(roots[0]), str(dest))
 
 
-def swap_base(new_dir: Path) -> None:
-    """Thay base cũ bằng base mới, giữ lại dữ liệu đăng nhập trình duyệt (browser_data)."""
-    if BASE_DIR.exists():
-        old_profile = BASE_DIR / "browser_data"
-        if old_profile.exists():
-            shutil.move(str(old_profile), str(new_dir / "browser_data"))
-        old_dir = APP_HOME / "base_old"
-        shutil.rmtree(old_dir, ignore_errors=True)
-        BASE_DIR.rename(old_dir)
-        shutil.rmtree(old_dir, ignore_errors=True)
-    new_dir.rename(BASE_DIR)
+def base_dir_for(sha: str) -> Path:
+    """Mỗi phiên bản base một thư mục riêng: cập nhật không phải đổi tên/xóa thư mục đang bị dùng
+    (Chrome hay tiến trình cũ còn giữ thư mục làm thư mục hiện hành thì Windows không cho đổi tên)."""
+    return APP_HOME / f"base-{sha[:12]}"
+
+
+def current_base(settings: dict):
+    path = settings.get("base_dir")
+    if path and Path(path).is_dir():
+        return Path(path)
+    return BASE_DIR if BASE_DIR.is_dir() else None  # bản app cũ cài base vào thư mục "base" cố định
+
+
+def browser_data_dir() -> Path:
+    """Hồ sơ Chrome (cookie, phiên đăng nhập) của crawler, nằm ngoài thư mục base."""
+    legacy = BASE_DIR / "browser_data"
+    # chưa chuyển được hồ sơ cũ ra ngoài thì vẫn dùng chỗ cũ, để không phải đăng nhập lại
+    return legacy if legacy.is_dir() and not BROWSER_DATA_DIR.exists() else BROWSER_DATA_DIR
+
+
+def migrate_browser_data() -> list:
+    """Gom hồ sơ Chrome từ các thư mục base cũ ra BROWSER_DATA_DIR. Trả về các dòng thông báo.
+
+    Bản app trước để hồ sơ trong base/browser_data, và khi cập nhật lỗi giữa chừng có thể đã dời
+    hồ sơ sang base_new/browser_data. Ưu tiên base (lần dùng gần nhất), rồi base_new, base_old.
+    """
+    messages = []
+    for source in (BASE_DIR, APP_HOME / "base_new", APP_HOME / "base_old"):
+        src = source / "browser_data"
+        if not src.is_dir():
+            continue
+        BROWSER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            target = BROWSER_DATA_DIR / item.name
+            if target.exists():
+                shutil.rmtree(item, ignore_errors=True)  # đã giữ bản mới hơn, bản cũ trùng thì bỏ
+                continue
+            try:
+                shutil.move(str(item), str(target))
+                messages.append(f"Đã giữ lại hồ sơ đăng nhập {item.name} (từ {source.name}).")
+            except OSError as e:
+                messages.append(f"[CẢNH BÁO] Chưa chuyển được hồ sơ đăng nhập {item.name}: {e}. "
+                                "Đóng hết cửa sổ Chrome của CrawlTool rồi mở lại app.")
+        try:
+            src.rmdir()  # chỉ xóa khi đã chuyển hết
+        except OSError:
+            pass
+    return messages
+
+
+def remove_old_bases(keep: Path) -> None:
+    """Dọn các bản base cũ. Thư mục nào còn bị khóa hoặc còn hồ sơ đăng nhập thì để lần sau."""
+    for path in APP_HOME.glob("base*"):
+        if path == keep or not path.is_dir() or (path / "browser_data").exists():
+            continue
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def uv_path() -> str:
@@ -171,6 +217,7 @@ def uv_env() -> dict:
     env = dict(os.environ)
     env.update({
         "UV_PROJECT_ENVIRONMENT": str(VENV_DIR),  # venv để ngoài base, cập nhật base không phải cài lại từ đầu
+        "MEDIACRAWLER_BROWSER_DATA_DIR": str(browser_data_dir()),  # phiên đăng nhập không nằm trong base
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1",
     })
@@ -645,21 +692,25 @@ class Api:
     def _update_worker(self, token: str) -> None:
         try:
             self._write("Đang kiểm tra bản mới của base code...")
+            for message in migrate_browser_data():
+                self._write(message)
             sha = latest_sha(token)
-            if sha == self._settings.get("base_sha") and BASE_DIR.exists():
+            current = current_base(self._settings)
+            if sha == self._settings.get("base_sha") and current:
                 self._write(f"Base code đã là bản mới nhất ({sha[:7]}).")
+                remove_old_bases(keep=current)
                 return
             self._write(f"Đang tải base code {sha[:7]}...")
             zip_bytes = github_get(f"https://api.github.com/repos/{BASE_REPO}/zipball/{sha}", token)
-            new_dir = APP_HOME / "base_new"
+            new_dir = base_dir_for(sha)
             shutil.rmtree(new_dir, ignore_errors=True)
             extract_zipball(zip_bytes, new_dir)
             self._write("Đang cài thư viện (lần đầu sẽ lâu vì phải tải Python và thư viện)...")
             if self._run_logged([uv_path(), "sync"], new_dir) != 0:
                 raise RuntimeError("uv sync thất bại, xem log ở trên")
-            swap_base(new_dir)
-            self._settings["base_sha"] = sha
+            self._settings["base_dir"], self._settings["base_sha"] = str(new_dir), sha
             save_settings(self._settings)
+            remove_old_bases(keep=new_dir)
             self._write(f"Đã cập nhật base code lên {sha[:7]}.")
         except urllib.error.HTTPError as e:
             hint = " (token sai, hết hạn hoặc không có quyền vào repo: đổi token trong tab Cài đặt)" if e.code in (401, 403, 404) else ""
@@ -673,7 +724,8 @@ class Api:
         name = PLATFORM_NAMES[platform]
         prefix = f"[{name}] " if len(self._jobs) > 1 else ""
         try:
-            code = self._run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *args], BASE_DIR, name, prefix)
+            base = current_base(self._settings)
+            code = self._run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *args], base, name, prefix)
             self._write(f"{prefix}Hoàn tất." if code == 0 else f"[LỖI] {prefix}Crawler dừng với mã {code}.")
         except Exception as e:  # noqa: BLE001
             self._write(f"[LỖI] {prefix}Không chạy được crawler: {e}")
@@ -753,7 +805,16 @@ class Api:
 
     def get_login(self) -> dict:
         login = self._login()
-        return {"type": login["type"], "saved": sorted(login["cookies"])}
+        sessions = sorted(p for p in PLATFORM_CODES if (browser_data_dir() / f"{p}.logged_in").exists())
+        return {"type": login["type"], "saved": sorted(login["cookies"]), "sessions": sessions}
+
+    def reset_session(self, platform) -> dict:
+        """Cho phép lần crawl tới đăng nhập lại nền tảng này (base mặc định không tự đăng nhập lặp lại)."""
+        if platform not in PLATFORM_CODES:
+            return {"error": "Nền tảng không hợp lệ"}
+        (browser_data_dir() / f"{platform}.logged_in").unlink(missing_ok=True)
+        self._write(f"Đã cho phép đăng nhập lại {PLATFORM_NAMES[platform]} ở lần crawl tới.")
+        return self.get_login()
 
     def set_login_type(self, login_type) -> dict:
         if login_type not in UI_LOGIN_TYPES:
@@ -860,8 +921,10 @@ class Api:
     def start(self, values) -> dict:
         if self._state != "idle":
             return {"error": "App đang bận, đợi xong rồi thử lại."}
-        if not BASE_DIR.exists():
+        if not current_base(self._settings):
             return {"error": "Chưa có base code. Vào tab Cài đặt → Kiểm tra cập nhật."}
+        for message in migrate_browser_data():  # phòng khi lần cập nhật trước chưa chuyển được hồ sơ
+            self._write(message)
         try:
             login = self._login()
             values = {**(values or {}), "login": login["type"]}

@@ -215,7 +215,8 @@
   .setting .head { display: flex; align-items: center; gap: 18px; }
   .cookie-list { display: flex; flex-direction: column; gap: 8px; }
   .cookie-row { display: grid; grid-template-columns: 130px 86px 1fr auto auto; gap: 8px; align-items: center; }
-  .cookie-row .name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .cookie-row .name, .session-row .name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .session-row { display: grid; grid-template-columns: 130px 120px auto 1fr; gap: 8px; align-items: center; }
   .chip { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; text-align: center; background: var(--hover); color: var(--muted); }
   .chip.ok { background: var(--ok-soft); color: var(--ok); }
   .gem-row { display: grid; grid-template-columns: 1fr 220px auto; gap: 8px; }
@@ -336,6 +337,7 @@
         <div class="seg" id="seg-login"></div>
         <p class="hint" id="login-hint"></p>
         <div class="cookie-list" id="cookie-list"></div>
+        <div class="cookie-list" id="session-list"></div>
       </div>
       <div class="card setting col">
         <div class="head"><div class="info"><h3>Gemini API <span class="chip" id="gem-status">chưa có key</span></h3>
@@ -842,7 +844,8 @@ function renderLogin() {
   $("login-summary").textContent = login.type === "cookie" ? "dùng cookie đã lưu" : "trong cửa sổ Chrome";
   $("login-hint").textContent = login.type === "cookie"
     ? "Dán cookie của từng nền tảng (lấy từ trình duyệt đã đăng nhập). Crawl nền tảng nào thì cần cookie của nền tảng đó."
-    : "Khi crawl, app mở cửa sổ Chrome riêng cho mỗi nền tảng. Lần đầu đăng nhập trong cửa sổ đó (QR, SMS hay mật khẩu đều được); các lần sau app tự nhớ.";
+    : "Khi crawl, app mở cửa sổ Chrome riêng cho mỗi nền tảng. Lần đầu đăng nhập trong cửa sổ đó (QR, SMS hay mật khẩu đều được); các lần sau app dùng lại phiên cũ. " +
+      "Nếu nền tảng báo phiên không còn hợp lệ, app dừng và KHÔNG tự đăng nhập lại (tránh bị khóa vì nghi bot): kiểm tra tài khoản rồi bấm “Đăng nhập lại” bên dưới.";
   const list = $("cookie-list");
   list.hidden = login.type !== "cookie";
   list.replaceChildren();
@@ -869,6 +872,34 @@ function renderLogin() {
     del.onclick = async () => { state.login = await api().set_cookie(code, ""); renderLogin(); toast("Đã xóa cookie " + p.name); };
     row.append(name, chip, input, save, del);
     list.append(row);
+  }
+
+  // Phiên đăng nhập trong cửa sổ Chrome: app không tự đăng nhập lại, người dùng chủ động mở khóa
+  const sessions = $("session-list");
+  sessions.hidden = login.type !== "qrcode";
+  sessions.replaceChildren();
+  for (const [code, p] of Object.entries(PLATFORMS)) {
+    const row = el("div", "session-row");
+    const name = el("span", "name");
+    const dot = el("span", "pdot");
+    dot.style.background = p.color;
+    name.append(dot, p.name);
+    const has = (login.sessions || []).includes(code);
+    const chip = el("span", "chip" + (has ? " ok" : ""), has ? "đã đăng nhập" : "chưa đăng nhập");
+    const relogin = el("button", "btn sm", "Đăng nhập lại");
+    relogin.disabled = !has;
+    relogin.title = "Lần crawl tới sẽ mở đăng nhập mới cho " + p.name;
+    relogin.onclick = async () => {
+      const ok = await confirmBox(`Đăng nhập lại ${p.name}?`,
+        "Chỉ làm khi chắc chắn phiên đã hết hạn (đã kiểm tra tài khoản trên điện thoại vẫn bình thường). " +
+        "Đăng nhập lặp lại nhiều lần dễ bị nền tảng coi là bot và khóa tài khoản.");
+      if (!ok) return;
+      state.login = await api().reset_session(code);
+      renderLogin();
+      toast(`Lần crawl tới sẽ đăng nhập lại ${p.name}`);
+    };
+    row.append(name, chip, relogin);
+    sessions.append(row);
   }
 }
 buildSeg("seg-login", LOGINS, "login", (b, name) => (b.textContent = name), async (value) => {

@@ -76,7 +76,7 @@ def test_login_settings():
         api = ct.Api()
         api._settings = {"form": {"login": "cookie", "platforms": ["dy"]}}
         api.init()  # cách đăng nhập cũ nằm trong form -> chuyển sang Cài đặt
-        assert api.get_login() == {"type": "cookie", "saved": []}
+        assert {k: api.get_login()[k] for k in ("type", "saved")} == {"type": "cookie", "saved": []}
         assert "login" not in api.init()["form"]
         assert api.set_login_type("phone")["error"] and api.set_cookie("nope", "x")["error"]
         assert api.set_cookie("dy", " sid=1; uid=2 ")["saved"] == ["dy"]
@@ -323,25 +323,53 @@ def test_token_roundtrip():
     assert ct.decrypt_token(blob) == "github_pat_test"
 
 
-def test_extract_and_swap():
+def test_base_update_keeps_login_profiles():
+    old = ct.APP_HOME, ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.save_settings
     with tempfile.TemporaryDirectory() as tmp:
-        ct.APP_HOME = Path(tmp)
-        ct.BASE_DIR = Path(tmp) / "base"
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("MrNMDien-MediaCrawler-abc1234/main.py", "print('v2')")
-        # base cũ có phiên đăng nhập cần giữ lại
-        (ct.BASE_DIR / "browser_data").mkdir(parents=True)
-        (ct.BASE_DIR / "browser_data" / "cookie").write_text("keep")
-        (ct.BASE_DIR / "main.py").write_text("print('v1')")
+        home = Path(tmp)
+        ct.APP_HOME, ct.BASE_DIR, ct.BROWSER_DATA_DIR = home, home / "base", home / "browser_data"
+        ct.save_settings = lambda settings: None
+        try:
+            # Tình huống thật: bản app cũ cập nhật lỗi giữa chừng, hồ sơ nằm rải ở base và base_new
+            (home / "base" / "browser_data" / "cdp_xhs_user_data_dir").mkdir(parents=True)
+            (home / "base" / "browser_data" / "cdp_xhs_user_data_dir" / "Cookies").write_text("xhs-moi")
+            (home / "base" / "browser_data" / "cdp_dy_user_data_dir").mkdir()
+            (home / "base" / "browser_data" / "cdp_dy_user_data_dir" / "Cookies").write_text("dy-moi")
+            (home / "base_new" / "browser_data" / "cdp_dy_user_data_dir").mkdir(parents=True)
+            (home / "base_new" / "browser_data" / "cdp_dy_user_data_dir" / "Cookies").write_text("dy-cu")
+            (home / "base_new" / "browser_data" / "cdp_bili_user_data_dir").mkdir()
+            (home / "base" / "main.py").write_text("print('v1')")
+            assert ct.browser_data_dir() == home / "base" / "browser_data"  # chưa chuyển: dùng chỗ cũ
+            assert ct.current_base({}) == home / "base"
 
-        new_dir = Path(tmp) / "base_new"
-        ct.extract_zipball(buf.getvalue(), new_dir)
-        ct.swap_base(new_dir)
+            messages = ct.migrate_browser_data()
+            data = home / "browser_data"
+            assert ct.browser_data_dir() == data
+            assert (data / "cdp_xhs_user_data_dir" / "Cookies").read_text() == "xhs-moi"
+            assert (data / "cdp_dy_user_data_dir" / "Cookies").read_text() == "dy-moi"  # bản trong base (mới hơn) thắng
+            assert (data / "cdp_bili_user_data_dir").is_dir() and len(messages) == 3
 
-        assert (ct.BASE_DIR / "main.py").read_text() == "print('v2')"
-        assert (ct.BASE_DIR / "browser_data" / "cookie").read_text() == "keep"
-        assert not new_dir.exists() and not (Path(tmp) / "base_old").exists()
+            # Cài bản mới vào thư mục riêng, không đổi tên thư mục cũ
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                zf.writestr("MrNMDien-MediaCrawler-abc1234/main.py", "print('v2')")
+            new_dir = ct.base_dir_for("abc1234def5678")
+            ct.extract_zipball(buf.getvalue(), new_dir)
+            assert new_dir.name == "base-abc1234def56" and (new_dir / "main.py").read_text() == "print('v2')"
+            ct.remove_old_bases(keep=new_dir)
+            assert sorted(p.name for p in home.iterdir()) == ["base-abc1234def56", "browser_data"]
+            assert ct.current_base({"base_dir": str(new_dir)}) == new_dir
+            assert ct.uv_env()["MEDIACRAWLER_BROWSER_DATA_DIR"] == str(data)
+
+            # Đánh dấu đã đăng nhập do base ghi; nút "Đăng nhập lại" xóa nó
+            (data / "xhs.logged_in").write_text("1")
+            api = ct.Api()
+            api._settings = {}
+            assert api.get_login()["sessions"] == ["xhs"]
+            assert api.reset_session("xhs")["sessions"] == [] and not (data / "xhs.logged_in").exists()
+            assert api.reset_session("nope")["error"]
+        finally:
+            ct.APP_HOME, ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.save_settings = old
 
 
 if __name__ == "__main__":
@@ -356,5 +384,5 @@ if __name__ == "__main__":
     test_normalize_and_library()
     test_thumb_cache()
     test_token_roundtrip()
-    test_extract_and_swap()
+    test_base_update_keeps_login_profiles()
     print("OK")

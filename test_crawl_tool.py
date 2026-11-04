@@ -404,6 +404,42 @@ def test_login_button_flow():
             ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.uv_path = old
 
 
+def test_search_channels():
+    with tempfile.TemporaryDirectory() as tmp:
+        base, data = Path(tmp) / "base", Path(tmp) / "data"
+        base.mkdir()
+        results = [
+            {"sec_uid": "MS4wLjABAAAAkenhA", "nickname": "Kênh A <b>", "douyin_id": "kenha", "followers": "1.2万",
+             "videos": 30, "signature": "phim AI", "avatar": "https://p3.douyinpic.com/a.jpg"},
+            {"sec_uid": "../../evil", "nickname": "giả mạo"},  # ID lạ bị loại
+            {"sec_uid": "MS4wLjABAAAAkenhB", "nickname": "Kênh B", "avatar": "http://khong-https/b.jpg"},
+        ]
+        (base / "run").write_text("\n".join([
+            "import json, os",
+            "assert os.environ['MEDIACRAWLER_USER_SEARCH'] == 'phim AI'",
+            "print('dang tim')",
+            f"print('USER_SEARCH_RESULT ' + json.dumps({json.dumps(results, ensure_ascii=False)!r} and json.loads({json.dumps(results, ensure_ascii=False)!r}), ensure_ascii=False))",
+        ]), encoding="utf-8")
+        old = ct.BASE_DIR, ct.uv_path, ct.fetch_image, ct.save_settings
+        ct.BASE_DIR, ct.uv_path, ct.save_settings = base, lambda: sys.executable, (lambda settings: None)
+        ct.fetch_image = lambda url, referer: b"\xff\xd8\xff\xe0jpg" if url.startswith("https://") else None
+        try:
+            api = ct.Api()
+            api._settings = {"data_dir": str(data)}
+            assert api.search_channels("  ")["error"]
+            api.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhB", "Kênh B")
+            res = api.search_channels("phim AI")
+            assert [r["nickname"] for r in res["results"]] == ["Kênh A <b>", "Kênh B"]
+            a, b = res["results"]
+            assert a["url"] == "https://www.douyin.com/user/MS4wLjABAAAAkenhA" and a["followers"] == 12000
+            assert a["avatar"].startswith("data:image/jpeg;base64,") and b["avatar"] == ""
+            assert a["followed"] is False and b["followed"] is True
+            assert "USER_SEARCH_RESULT" not in "\n".join(api._lines) and "Tìm thấy 2 kênh" in "\n".join(api._lines)
+            assert api._state == "idle"
+        finally:
+            ct.BASE_DIR, ct.uv_path, ct.fetch_image, ct.save_settings = old
+
+
 def test_old_form_migrates():
     api = ct.Api()
     api._settings = {"form": {"platform": "dy", "crawl_type": "search"}}
@@ -534,6 +570,7 @@ if __name__ == "__main__":
     test_follow_logic()
     test_follow_check_end_to_end()
     test_login_button_flow()
+    test_search_channels()
     test_old_form_migrates()
     test_parse()
     test_normalize_and_library()

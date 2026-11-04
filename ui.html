@@ -213,6 +213,12 @@
   .setting .acts { display: flex; gap: 8px; flex: none; }
   .setting.col { flex-direction: column; align-items: stretch; gap: 14px; }
   .channel-list { display: flex; flex-direction: column; gap: 8px; }
+  .user-results { display: flex; flex-direction: column; gap: 6px; max-height: 330px; overflow-y: auto; }
+  .user-result { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; padding: 8px; border: 1px solid var(--border); border-radius: 10px; }
+  .user-result .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: var(--hover); }
+  .user-result .who { min-width: 0; }
+  .user-result .who b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-result .who span { display: block; font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .channel { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
   .channel .top { display: flex; align-items: center; gap: 8px; }
   .channel .top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -345,7 +351,12 @@
     <div class="card form-panel">
       <div class="form-scroll">
         <div class="section-title">Thêm kênh</div>
-        <label class="field"><span class="label">Link trang kênh Douyin</span>
+        <div class="field"><span class="label">Tìm kênh Douyin theo tên</span>
+          <div class="tg-row"><input type="text" id="fl-q" placeholder="VD: AI短剧, 漫剧 hoặc tên kênh" spellcheck="false">
+            <button class="btn" id="fl-search" type="button">Tìm</button></div>
+          <span class="hint" id="fl-search-hint">App mở Douyin (cửa sổ Chrome riêng) để tìm, mất khoảng 10–30 giây.</span></div>
+        <div class="user-results" id="fl-results"></div>
+        <label class="field"><span class="label">Hoặc dán link trang kênh</span>
           <input type="text" id="fl-url" placeholder="Dán link kênh hoặc đoạn chia sẻ từ app Douyin" spellcheck="false"></label>
         <label class="field"><span class="label">Tên gợi nhớ (không bắt buộc)</span><input type="text" id="fl-name" placeholder="VD: Kênh phim AI cổ trang"></label>
         <button class="btn primary" id="fl-add" type="button">+ Theo dõi kênh</button>
@@ -832,6 +843,47 @@ $("fl-add").onclick = async () => {
   }
 };
 $("fl-url").onkeydown = (e) => e.key === "Enter" && $("fl-add").click();
+function renderUserResults(results) {
+  const box = $("fl-results");
+  box.replaceChildren(...results.map((u) => {
+    const row = el("div", "user-result");
+    const img = el("img", "avatar");
+    if (u.avatar) img.src = u.avatar;  // data URI do app tải về
+    const who = el("div", "who");
+    who.append(el("b", "", u.nickname || "(không tên)"));
+    who.append(el("span", "", [u.douyin_id && "ID: " + u.douyin_id, `${fmt.format(u.followers)} người theo dõi`, `${u.videos} video`].filter(Boolean).join(" · ")));
+    if (u.signature) who.append(el("span", "", u.signature));
+    const btn = el("button", "btn sm" + (u.followed ? "" : " primary"), u.followed ? "Đã theo dõi" : "Theo dõi");
+    btn.disabled = u.followed;
+    btn.onclick = async () => {
+      const res = await api().follow_channel(u.url, u.nickname);
+      if (res.error) return toast(res.error, true);
+      u.followed = true;
+      btn.textContent = "Đã theo dõi";
+      btn.className = "btn sm";
+      btn.disabled = true;
+      renderFollows(res);
+      toast(`Đã theo dõi ${u.nickname}`);
+    };
+    row.append(img, who, btn);
+    return row;
+  }));
+}
+$("fl-search").onclick = async () => {
+  const btn = $("fl-search");
+  btn.disabled = true;
+  btn.textContent = "Đang tìm...";
+  try {
+    const res = await api().search_channels($("fl-q").value);
+    if (res.error) return toast(res.error, true);
+    renderUserResults(res.results);
+    $("fl-search-hint").textContent = res.results.length ? `${res.results.length} kênh khớp, bấm Theo dõi kênh bạn muốn.` : "Không có kênh nào khớp, thử tên khác.";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Tìm";
+  }
+};
+$("fl-q").onkeydown = (e) => e.key === "Enter" && $("fl-search").click();
 $("fl-check").onclick = async () => {
   const res = await api().check_follows();
   if (res.error) return toast(res.error, true);
@@ -997,7 +1049,7 @@ function appendLog(lines) {
 }
 
 // ---------- Trạng thái ----------
-const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl", following: "Đang kiểm tra kênh theo dõi", login: "Đang đăng nhập" };
+const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl", following: "Đang kiểm tra kênh theo dõi", login: "Đang đăng nhập", searching: "Đang tìm kênh" };
 function applyState(s) {
   const wasCrawling = state.busyState === "crawling" || state.busyState === "following";
   state.busyState = s.state;

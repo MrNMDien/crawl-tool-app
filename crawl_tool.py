@@ -494,6 +494,39 @@ def thumb_file(data_dir: str, key: str) -> Path:
     return Path(data_dir) / "thumbs" / f"{safe_key(key)}.img"
 
 
+def fetch_image(url: str, referer: str):
+    """Tải một ảnh (https, tối đa 5 MB, đúng định dạng ảnh). Không tải được thì None."""
+    if not str(url).startswith("https://"):
+        return None
+    req = urllib.request.Request(url, headers={"Referer": referer, "User-Agent": BROWSER_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read(MAX_THUMB_BYTES + 1)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return data if len(data) <= MAX_THUMB_BYTES and image_mime(data) else None
+
+
+def parse_user_results(line: str) -> list:
+    """Dòng USER_SEARCH_RESULT <json> do base in ra -> danh sách kênh đã kiểm tra kiểu dữ liệu."""
+    try:
+        raw = json.loads(line.split("USER_SEARCH_RESULT ", 1)[1])
+    except (IndexError, ValueError):
+        return []
+    results = []
+    for user in raw if isinstance(raw, list) else []:
+        sec_uid = str(user.get("sec_uid", "")) if isinstance(user, dict) else ""
+        if not re.fullmatch(r"MS4wLjABAAAA[A-Za-z0-9_-]+", sec_uid):
+            continue
+        results.append({
+            "sec_uid": sec_uid, "url": f"https://www.douyin.com/user/{sec_uid}",
+            "nickname": str(user.get("nickname") or "")[:60], "douyin_id": str(user.get("douyin_id") or "")[:40],
+            "followers": parse_count(user.get("followers")), "videos": parse_count(user.get("videos")),
+            "signature": str(user.get("signature") or "")[:120], "avatar": str(user.get("avatar") or ""),
+        })
+    return results
+
+
 def download_thumb(item: dict, data_dir: str):
     """Tải ảnh bìa về máy (một lần). Trả về đường dẫn file, hoặc None nếu không tải được."""
     path = thumb_file(data_dir, item["key"])
@@ -501,15 +534,8 @@ def download_thumb(item: dict, data_dir: str):
         return path
     if not item.get("cover"):
         return None
-    req = urllib.request.Request(item["cover"], headers={
-        "Referer": THUMB_REFERER.get(item["platform"], ""), "User-Agent": BROWSER_UA,
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = resp.read(MAX_THUMB_BYTES + 1)
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
-    if len(data) > MAX_THUMB_BYTES or not image_mime(data):
+    data = fetch_image(item["cover"], THUMB_REFERER.get(item["platform"], ""))
+    if data is None:
         return None
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".part")
@@ -830,7 +856,8 @@ class Api:
         try:
             for raw in proc.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip()
-                self._write(prefix + line)
+                if not line.startswith("USER_SEARCH_RESULT "):  # dữ liệu cho app, không in ra nhật ký
+                    self._write(prefix + line)
                 if output is not None:
                     output.append(line)
             return proc.wait()
@@ -1046,6 +1073,46 @@ class Api:
                              "added_at": int(time.time()), "known": [], "new": []}
             write_follows(self._data_dir(), channels)
         return self.follows()
+
+    def search_channels(self, query) -> dict:
+        """Tìm kênh Douyin theo tên (mở Chrome của Douyin như lúc kiểm tra kênh, không crawl, không lưu gì)."""
+        query = str(query or "").strip()[:50]
+        if not query:
+            return {"error": "Nhập tên kênh cần tìm"}
+        if self._state != "idle":
+            return {"error": "App đang bận, đợi xong rồi thử lại."}
+        if not current_base(self._settings):
+            return {"error": "Chưa có base code. Vào tab Cài đặt → Kiểm tra cập nhật."}
+        self._state = "searching"
+        try:
+            login = self._login()
+            values = {"platform": "dy", "crawl_type": "search", "targets": "search", "login": login["type"],
+                      "max_notes": 1, "max_comments": 1, "headless": self._follow_settings()["headless"]}
+            if login["type"] == "cookie":
+                values["cookies"] = self._cookies().get("dy", "")
+            output = []
+            self._write("─" * 60)
+            self._write(f"Tìm kênh Douyin theo tên: {query}")
+            self._run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *build_args(values, self._data_dir())],
+                             current_base(self._settings), "Tìm kênh", "[Tìm kênh] ",
+                             extra_env={"MEDIACRAWLER_USER_SEARCH": query}, output=output)
+            line = next((l for l in output if l.startswith("USER_SEARCH_RESULT ")), None)
+            if line is None:
+                return {"error": "Không tìm được kênh, xem Nhật ký ở tab Crawl để biết lý do."}
+            results = parse_user_results(line)
+            followed = {c["url"] for c in load_follows(self._data_dir()).values()}
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                avatars = list(pool.map(lambda r: fetch_image(r["avatar"], THUMB_REFERER["dy"]), results))
+            for result, avatar in zip(results, avatars):
+                result["followed"] = result["url"] in followed
+                result["avatar"] = f"data:{image_mime(avatar)};base64,{base64.b64encode(avatar).decode()}" if avatar else ""
+            self._write(f"Tìm thấy {len(results)} kênh.")
+            return {"results": results}
+        except Exception as e:  # noqa: BLE001
+            self._write(f"[LỖI] Tìm kênh thất bại: {e}")
+            return {"error": f"Tìm kênh thất bại: {e}"}
+        finally:
+            self._state = "idle"
 
     def unfollow(self, key) -> dict:
         with self._follow_lock:

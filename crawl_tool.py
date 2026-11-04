@@ -29,7 +29,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.2.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.3.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -515,6 +515,11 @@ def normalize(platform: str, row: dict):
         "keyword": str(row.get("source_keyword") or ""),
         "source_creator": str(row.get("source_creator") or ""),  # link kênh người dùng theo dõi (chế độ creator)
         "author": str(row.get("nickname") or ""),
+        # series (合集 của Douyin): ID chỉ gồm số, app ghép thành link douyin.com/collection/<id>
+        "series_id": re.sub(r"\D", "", str(row.get("series_id") or ""))[:30],
+        "series_name": str(row.get("series_name") or "").strip()[:120],
+        "episode": parse_count(row.get("episode")),
+        "episodes_total": parse_count(row.get("episodes_total")),
     }
 
 
@@ -604,7 +609,8 @@ def download_thumb(item: dict, data_dir: str):
 
 
 ITEM_FIELDS = ("key", "platform", "title", "url", "cover", "likes", "views", "comments", "shares",
-               "published", "crawled", "keyword", "author", "source_creator")
+               "published", "crawled", "keyword", "author", "source_creator",
+               "series_id", "series_name", "episode", "episodes_total")
 
 
 def library_file(data_dir: str) -> Path:

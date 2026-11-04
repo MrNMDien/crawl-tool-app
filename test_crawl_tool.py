@@ -510,8 +510,9 @@ def test_normalize_and_library():
              "create_time": 1730000000, "last_modify_ts": 1, "source_keyword": "AI短剧"},
             # cùng video crawl lại lần sau: lượt like mới phải thắng
             {"aweme_id": "111", "title": "Phim AI tập 1", "aweme_url": "https://www.douyin.com/video/111",
-             "cover_url": "https://p3.douyinpic.com/a.jpg", "liked_count": "9000", "last_modify_ts": 2},
-            {"aweme_id": "222", "aweme_url": "javascript:alert(1)", "cover_url": "http://x/b.jpg", "last_modify_ts": 1},
+             "cover_url": "https://p3.douyinpic.com/a.jpg", "liked_count": "9000", "last_modify_ts": 2,
+             "series_id": "7694570596704716826", "series_name": "《总裁心声太反差》", "episode": 7, "episodes_total": 9},
+            {"aweme_id": "222", "series_id": "1/../x", "aweme_url": "javascript:alert(1)", "cover_url": "http://x/b.jpg", "last_modify_ts": 1},
         ]
         (dy_dir / "search_contents_2026-11-04.jsonl").write_text(
             "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\nhỏng\n", encoding="utf-8")
@@ -526,6 +527,9 @@ def test_normalize_and_library():
         items = {i["key"]: i for i in ct.load_library(tmp)}
         assert set(items) == {"dy_111", "dy_222", "xhs_abc"}
         assert items["dy_111"]["likes"] == 9000
+        assert {k: items["dy_111"][k] for k in ("series_id", "series_name", "episode", "episodes_total")} == {
+            "series_id": "7694570596704716826", "series_name": "《总裁心声太反差》", "episode": 7, "episodes_total": 9}
+        assert items["dy_222"]["series_id"] == "1" and items["xhs_abc"]["series_id"] == ""  # ID series chỉ giữ chữ số
         assert items["dy_222"]["url"] == ""  # link lạ bị loại, không cho giao diện mở
         assert items["dy_222"]["cover"] == "https://x/b.jpg"  # http được nâng lên https
         assert items["xhs_abc"]["cover"] == "https://sns-webpic.xhscdn.com/1.jpg"

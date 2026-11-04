@@ -173,6 +173,12 @@
   .stats { display: flex; gap: 11px; color: var(--muted); font-size: 12.5px; flex-wrap: wrap; }
   .stats span { display: inline-flex; align-items: center; gap: 4px; }
   .stats svg { width: 13px; height: 13px; }
+  .series-chip { font-size: 12px; color: var(--accent); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .series-info { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); font-size: 12px; color: var(--muted); }
+  .series-info b { color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .eps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+  .eps button { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 6px; padding: 1px 6px; font-size: 11.5px; cursor: pointer; }
+  .eps button:hover { border-color: var(--accent); color: var(--accent); }
   .meta { font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .vactions { display: flex; gap: 6px; margin-top: auto; }
   .vactions .save { flex: 1; }
@@ -601,11 +607,14 @@ function createGallery(root, mode) {
   if (isLib) sorts.unshift(["saved_at", "Mới lưu nhất"]);
   if (isFollow) sorts.unshift(sorts.splice(4, 1)[0]);  // video mới: mặc định mới đăng nhất
   for (const [v, t] of sorts) fSort.append(new Option(t, v));
+  const fView = el("select");
+  fView.append(new Option("Từng video", "video"), new Option("Gom theo series", "series"));
+  fView.title = "Gom các tập cùng một series (合集 Douyin) thành một thẻ";
   const total = el("span", "total");
   const reload = iconEl("button", "btn sm icon", "reload");
   reload.title = "Làm mới";
   reload.onclick = () => loadData();
-  bar.append(title, search, scope, fPlatform, fKeyword, fSort, total, el("div", "spacer"));
+  bar.append(title, search, scope, fPlatform, fKeyword, fSort, fView, total, el("div", "spacer"));
   if (isFollow) {
     const seen = el("button", "btn sm", "Đánh dấu đã xem hết");
     seen.onclick = async () => { renderFollows(await api().mark_seen(null)); toast("Đã đánh dấu đã xem"); };
@@ -655,15 +664,21 @@ function createGallery(root, mode) {
     const scoped = g.items.filter(inScope);
     fillSelect(fPlatform, "Mọi nền tảng", [...new Set(scoped.map((i) => i.platform))].map((p) => [p, PLATFORMS[p]?.name || p]));
     fillSelect(fKeyword, "Mọi từ khóa", [...new Set(scoped.map((i) => i.keyword).filter(Boolean))].sort().map((k) => [k, k]));
-    const list = filtered();
+    const videos = filtered();
+    const bySeries = fView.value === "series";
+    const list = bySeries ? groupSeries(videos, fSort.value) : videos;
     observer.disconnect();
-    grid.replaceChildren(...list.slice(0, g.shown).map(card));
+    grid.replaceChildren(...list.slice(0, g.shown).map(bySeries ? seriesCard : card));
     grid.querySelectorAll(".thumb").forEach((t) => (thumbCache.has(t.dataset.key) ? loadThumb(t) : observer.observe(t)));
-    total.textContent = list.length === scoped.length ? `${list.length} video` : `${list.length} / ${scoped.length} video`;
+    total.textContent = bySeries ? `${list.length} series`
+      : list.length === scoped.length ? `${list.length} video` : `${list.length} / ${scoped.length} video`;
     more.hidden = list.length <= g.shown;
     empty.hidden = list.length > 0;
     live.hidden = isLib || state.busyState !== (isFollow ? "following" : "crawling");
-    if (scoped.length) {
+    if (bySeries && videos.length) {
+      emptyTitle.textContent = "Chưa thấy video nào thuộc series";
+      emptyText.textContent = "Hiện chỉ Douyin cho biết video thuộc series (合集). Video lẻ không hiện ở chế độ này.";
+    } else if (scoped.length) {
       emptyTitle.textContent = "Không có video khớp bộ lọc";
       emptyText.textContent = "Thử bỏ bớt bộ lọc hoặc đổi từ khóa tìm.";
     } else if (isFollow) {
@@ -690,7 +705,7 @@ function createGallery(root, mode) {
     for (const mark of grid.querySelectorAll(`.saved-mark[data-key="${CSS.escape(key)}"]`)) mark.hidden = !saved;
   };
   q.oninput = () => { clearTimeout(g.timer); g.timer = setTimeout(() => { g.shown = PAGE; g.render(); }, 150); };
-  for (const s of [scope, fPlatform, fKeyword, fSort]) s.onchange = () => { g.shown = PAGE; g.render(); };
+  for (const s of [scope, fPlatform, fKeyword, fSort, fView]) s.onchange = () => { g.shown = PAGE; g.render(); };
   moreBtn.onclick = () => { g.shown += PAGE; g.render(); };
   return g;
 }
@@ -711,6 +726,56 @@ function setSaveButton(btn, saved) {
   btn.classList.toggle("on", saved);
   btn.lastChild.textContent = saved ? "Đã lưu" : "Lưu";
   btn.title = saved ? "Bỏ khỏi thư viện" : "Thêm vào thư viện";
+}
+
+const seriesUrl = (id) => `https://www.douyin.com/collection/${id}`;
+const TIME_SORTS = new Set(["published", "crawled", "saved_at"]);
+
+// Gom video theo series. Xếp series theo tổng chỉ số (like, view...) của các tập, hoặc tập mới nhất nếu xếp theo thời gian.
+function groupSeries(items, sort) {
+  const groups = new Map();
+  for (const item of items) {
+    if (!item.series_id) continue;
+    if (!groups.has(item.series_id)) groups.set(item.series_id, []);
+    groups.get(item.series_id).push(item);
+  }
+  return [...groups.entries()].map(([id, episodes]) => {
+    episodes.sort((a, b) => (a.episode || 0) - (b.episode || 0));
+    const values = episodes.map((e) => e[sort] || 0);
+    return {
+      id, episodes,
+      top: episodes.reduce((a, b) => (b.likes > a.likes ? b : a)),
+      likes: episodes.reduce((n, e) => n + e.likes, 0),
+      total: Math.max(...episodes.map((e) => e.episodes_total || 0)),
+      score: TIME_SORTS.has(sort) ? Math.max(...values) : values.reduce((a, b) => a + b, 0),
+    };
+  }).sort((a, b) => b.score - a.score);
+}
+
+function seriesCard(s) {
+  const c = card(s.top);  // ảnh bìa, nút lưu/mở/copy là của tập nhiều like nhất
+  c.querySelector(".series-chip")?.remove();
+  const chip = c.querySelector(".likes-chip");
+  chip.lastChild.textContent = fmt.format(s.likes);
+  chip.title = "Tổng like các tập đã crawl";
+  const info = el("div", "series-info");
+  const name = el("b", "", s.top.series_name || "Series không tên");
+  name.title = s.top.series_name;
+  info.append(name, el("span", "", `Đã crawl ${s.episodes.length} tập` + (s.total ? ` · series đã ra ${s.total} tập` : "")));
+  const eps = el("div", "eps");
+  for (const e of s.episodes) {
+    const b = el("button", "", `Tập ${e.episode || "?"} · ${fmt.format(e.likes)}`);
+    b.title = e.title;
+    b.onclick = () => e.url && api().open_url(e.url);
+    eps.append(b);
+  }
+  info.append(eps);
+  c.querySelector(".vbody").prepend(info);
+  const open = el("button", "btn sm", "Mở series");
+  open.title = "Mở series trên Douyin (đủ các tập)";
+  open.onclick = () => api().open_url(seriesUrl(s.id));
+  c.querySelector(".vactions").append(open);
+  return c;
 }
 
 function card(item) {
@@ -738,6 +803,11 @@ function card(item) {
     stats.append(s);
   }
   if (stats.childElementCount) body.append(stats);
+  if (item.series_id) {
+    const sc = el("div", "series-chip", `Series ${item.series_name || ""} · tập ${item.episode || "?"}${item.episodes_total ? "/" + item.episodes_total : ""}`);
+    sc.title = item.series_name;
+    body.append(sc);
+  }
   const channel = state.channelNames?.[item.source_creator];
   const meta = [channel || item.author, fmtDate(item.published), item.keyword && "#" + item.keyword].filter(Boolean).join(" · ");
   body.append(el("div", "meta", meta));

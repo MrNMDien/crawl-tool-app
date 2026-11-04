@@ -85,7 +85,12 @@ def test_login_settings():
         assert api.set_cookie("dy", "")["saved"] == []
         assert api.set_login_type("qrcode")["type"] == "qrcode"
 
-        assert api.get_gemini() == {"has_key": False, "model": ct.GEMINI_DEFAULT_MODEL}
+        assert api.get_gemini() == {"has_key": False, "model": ct.GEMINI_DEFAULT_MODEL, "enabled": True}
+        # tắt AI: không gọi Gemini, kể cả khi đã có key
+        assert api.set_gemini("AIza-test", None, False, False)["enabled"] is False
+        assert "tắt" in api.suggest_keywords("phim AI")["error"]
+        assert api.set_gemini(None, None, False, True)["enabled"] is True and api.get_gemini()["has_key"]
+        api.set_gemini(None, None, True)
         assert api.set_gemini("AIza-test", "gemini-2.5-flash")["has_key"] is True
         assert "AIza-test" not in json.dumps(api._settings)
         assert api.set_gemini(None, "../../evil")["error"]

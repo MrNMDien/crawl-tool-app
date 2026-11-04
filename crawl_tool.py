@@ -702,10 +702,13 @@ class Api:
     # --- Gemini (trong Cài đặt) ---
     def get_gemini(self) -> dict:
         gemini = self._settings.get("gemini") if isinstance(self._settings.get("gemini"), dict) else {}
-        return {"has_key": bool(gemini.get("key")), "model": gemini.get("model") or GEMINI_DEFAULT_MODEL}
+        return {"has_key": bool(gemini.get("key")), "model": gemini.get("model") or GEMINI_DEFAULT_MODEL,
+                "enabled": gemini.get("enabled", True)}
 
-    def set_gemini(self, key=None, model=None, clear=False) -> dict:
+    def set_gemini(self, key=None, model=None, clear=False, enabled=None) -> dict:
         gemini = dict(self._settings.get("gemini") or {})
+        if enabled is not None:
+            gemini["enabled"] = bool(enabled)
         if clear:
             gemini.pop("key", None)
         elif key and str(key).strip():
@@ -724,6 +727,8 @@ class Api:
         if not topic:
             return {"error": "Nhập chủ đề cần tìm"}
         gemini = self._settings.get("gemini") or {}
+        if not self.get_gemini()["enabled"]:
+            return {"error": "Gợi ý từ khóa bằng AI đang tắt (bật lại trong Cài đặt)"}
         if not gemini.get("key"):
             return {"error": "need_key"}
         try:

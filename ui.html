@@ -333,12 +333,15 @@
       <div class="card setting col">
         <div class="head"><div class="info"><h3>Gemini API <span class="chip" id="gem-status">chưa có key</span></h3>
           <p>Dùng để gợi ý từ khóa tìm kiếm. Lấy key miễn phí ở <button class="link" id="btn-gem-link" type="button">Google AI Studio</button>. Key lưu mã hóa trên máy này.</p></div></div>
-        <div class="gem-row">
-          <input type="password" id="gem-key" placeholder="Dán API key (để trống nếu giữ key cũ)" autocomplete="off">
-          <input type="text" id="gem-model" placeholder="Model" spellcheck="false">
-          <button class="btn" id="btn-gem-save">Lưu</button>
+        <label class="switch"><span class="text"><b>Dùng AI gợi ý từ khóa</b><span class="hint">Tắt thì ẩn nút ✨ Gợi ý bằng Gemini ở tab Crawl, app không gọi Gemini</span></span><input type="checkbox" id="gem-enabled"><span class="track"></span></label>
+        <div id="gem-fields" style="display: flex; flex-direction: column; gap: 10px">
+          <div class="gem-row">
+            <input type="password" id="gem-key" placeholder="Dán API key (để trống nếu giữ key cũ)" autocomplete="off">
+            <input type="text" id="gem-model" placeholder="Model" spellcheck="false">
+            <button class="btn" id="btn-gem-save">Lưu</button>
+          </div>
+          <div><button class="link" id="btn-gem-clear" type="button">Xóa key</button></div>
         </div>
-        <div><button class="link" id="btn-gem-clear" type="button">Xóa key</button></div>
       </div>
       <div class="card setting">
         <div class="info"><h3>Thư mục kết quả</h3><p><code id="data-dir">—</code></p></div>
@@ -711,7 +714,7 @@ function syncForm() {
   const t = CRAWL_TYPES[state.form.crawl_type] || CRAWL_TYPES.search;
   $("targets-label").textContent = t.label;
   $("targets-hint").textContent = t.hint;
-  $("btn-ai").hidden = !multiPlatform();
+  $("btn-ai").hidden = !multiPlatform() || state.gemini?.enabled === false;
 }
 function fillForm(form) {
   state.form = { ...form };
@@ -858,11 +861,18 @@ $("btn-login-settings").onclick = () => { showTab("settings"); $("login-card").s
 // ---------- Cài đặt: Gemini ----------
 function renderGemini(g) {
   state.gemini = g;
-  $("gem-status").textContent = g.has_key ? "đã có key" : "chưa có key";
-  $("gem-status").className = "chip" + (g.has_key ? " ok" : "");
+  $("gem-status").textContent = !g.enabled ? "đã tắt" : g.has_key ? "đã có key" : "chưa có key";
+  $("gem-status").className = "chip" + (g.enabled && g.has_key ? " ok" : "");
+  $("gem-enabled").checked = g.enabled;
+  $("gem-fields").hidden = !g.enabled;
   $("gem-model").value = g.model;
   $("btn-gem-clear").hidden = !g.has_key;
+  if (state.form.platforms) syncForm();  // ẩn/hiện nút ✨ ở tab Crawl
 }
+$("gem-enabled").onchange = async () => {
+  renderGemini(await api().set_gemini(null, null, false, $("gem-enabled").checked));
+  toast($("gem-enabled").checked ? "Đã bật gợi ý từ khóa bằng AI" : "Đã tắt gợi ý từ khóa bằng AI");
+};
 $("btn-gem-link").onclick = () => api().open_url("https://aistudio.google.com/apikey");
 $("btn-gem-save").onclick = async () => {
   const res = await api().set_gemini($("gem-key").value, $("gem-model").value, false);

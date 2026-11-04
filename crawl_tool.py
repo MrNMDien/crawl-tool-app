@@ -820,18 +820,55 @@ class Api:
                 del self._lines[:1000]
                 self._dropped += 1000
 
-    def _run_logged(self, cmd: list, cwd: Path, name: str = "uv", prefix: str = "") -> int:
+    def _run_logged(self, cmd: list, cwd: Path, name: str = "uv", prefix: str = "", extra_env: dict = None,
+                    output: list = None) -> int:
         proc = subprocess.Popen(
-            cmd, cwd=str(cwd), env=uv_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
+            cmd, cwd=str(cwd), env={**uv_env(), **(extra_env or {})}, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
         )
         self._procs[name] = proc
         try:
             for raw in proc.stdout:
-                self._write(prefix + raw.decode("utf-8", errors="replace").rstrip())
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                self._write(prefix + line)
+                if output is not None:
+                    output.append(line)
             return proc.wait()
         finally:
             self._procs.pop(name, None)
+
+    def _login_run(self, platform: str, headless: bool) -> bool:
+        """Chạy base ở chế độ chỉ đăng nhập; True nếu base xác nhận đang đăng nhập (in LOGIN_OK)."""
+        values = {"platform": platform, "crawl_type": "search", "targets": "login", "login": "qrcode",
+                  "max_notes": 1, "max_comments": 1, "headless": headless}
+        output = []
+        self._run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *build_args(values, self._data_dir())],
+                         current_base(self._settings), "Đăng nhập", f"[Đăng nhập {PLATFORM_NAMES[platform]}] ",
+                         extra_env={"MEDIACRAWLER_LOGIN_ONLY": "1"}, output=output)
+        return any("LOGIN_OK" in line for line in output)
+
+    def _login_worker(self, platform: str, verify_only: bool) -> None:
+        name = PLATFORM_NAMES[platform]
+        try:
+            self._write("─" * 60)
+            if not verify_only:
+                # người dùng tự bấm Đăng nhập: cho phép đăng nhập mới dù trước đó đã có dấu
+                (browser_data_dir() / f"{platform}.logged_in").unlink(missing_ok=True)
+                self._write(f"Mở Chrome để đăng nhập {name}. Đăng nhập trong cửa sổ đó (QR, SMS hay mật khẩu), "
+                            "đã đăng nhập sẵn thì app tự nhận ra.")
+                if not self._login_run(platform, headless=False):
+                    self._write(f"[LỖI] Chưa đăng nhập được {name} (hết giờ chờ hoặc cửa sổ bị đóng). Thử lại khi sẵn sàng.")
+                    return
+                self._write(f"Đã đăng nhập {name}. Đang mở lại Chrome (ẩn) để kiểm tra phiên được giữ sau khi đóng...")
+            if self._login_run(platform, headless=True):
+                self._write(f"Hoàn tất. {name}: phiên đăng nhập được giữ, các lần crawl sau không phải đăng nhập lại.")
+            else:
+                self._write(f"[LỖI] {name}: phiên đăng nhập KHÔNG còn sau khi đóng Chrome. Bấm Copy log và gửi để phân tích.")
+        except Exception as e:  # noqa: BLE001
+            self._write(f"[LỖI] Đăng nhập {name} thất bại: {e}")
+        finally:
+            self._state = "idle"
+            self._lib_rev += 1  # giao diện tải lại trạng thái phiên
 
     def _token(self) -> str:
         blob = self._settings.get("token")
@@ -1159,6 +1196,18 @@ class Api:
         login = self._login()
         sessions = sorted(p for p in PLATFORM_CODES if (browser_data_dir() / f"{p}.logged_in").exists())
         return {"type": login["type"], "saved": sorted(login["cookies"]), "sessions": sessions}
+
+    def login_platform(self, platform, verify_only=False) -> dict:
+        """Nút Đăng nhập / Kiểm tra phiên trong Cài đặt: đăng nhập 1 lần ngoài lúc crawl, rồi tự kiểm tra phiên còn giữ."""
+        if platform not in PLATFORM_CODES:
+            return {"error": "Nền tảng không hợp lệ"}
+        if self._state != "idle":
+            return {"error": "App đang bận, đợi xong rồi thử lại."}
+        if not current_base(self._settings):
+            return {"error": "Chưa có base code. Vào tab Cài đặt → Kiểm tra cập nhật."}
+        self._state = "login"
+        threading.Thread(target=self._login_worker, args=(platform, bool(verify_only)), daemon=True).start()
+        return {"ok": True}
 
     def reset_session(self, platform) -> dict:
         """Cho phép lần crawl tới đăng nhập lại nền tảng này (base mặc định không tự đăng nhập lặp lại)."""

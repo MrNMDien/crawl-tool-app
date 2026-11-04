@@ -227,7 +227,7 @@
   .cookie-list { display: flex; flex-direction: column; gap: 8px; }
   .cookie-row { display: grid; grid-template-columns: 130px 86px 1fr auto auto; gap: 8px; align-items: center; }
   .cookie-row .name, .session-row .name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
-  .session-row { display: grid; grid-template-columns: 130px 120px auto 1fr; gap: 8px; align-items: center; }
+  .session-row { display: grid; grid-template-columns: 130px 120px 1fr; gap: 8px; align-items: center; }
   .chip { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; text-align: center; background: var(--hover); color: var(--muted); }
   .chip.ok { background: var(--ok-soft); color: var(--ok); }
   .gem-row { display: grid; grid-template-columns: 1fr 220px auto; gap: 8px; }
@@ -755,7 +755,9 @@ const library = createGallery($("library"), "library");
 const followGallery = createGallery($("follow-gallery"), "follow");
 
 async function loadData() {
-  const [data, follow] = await Promise.all([api().library(), api().follows()]);
+  const [data, follow, login] = await Promise.all([api().library(), api().follows(), api().get_login()]);
+  state.login = login;
+  renderLogin();
   state.lastRun = data.last_run;
   state.allItems = data.items;
   results.setItems(data.items);
@@ -995,7 +997,7 @@ function appendLog(lines) {
 }
 
 // ---------- Trạng thái ----------
-const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl", following: "Đang kiểm tra kênh theo dõi" };
+const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl", following: "Đang kiểm tra kênh theo dõi", login: "Đang đăng nhập" };
 function applyState(s) {
   const wasCrawling = state.busyState === "crawling" || state.busyState === "following";
   state.busyState = s.state;
@@ -1003,7 +1005,7 @@ function applyState(s) {
   $("status-text").textContent = s.state === "crawling" && s.running.length
     ? "Đang crawl: " + s.running.join(", ") : STATUS[s.state] || s.state;
   $("btn-start").disabled = s.state !== "idle";
-  $("btn-stop").disabled = s.state !== "crawling" && s.state !== "following";
+  $("btn-stop").disabled = !["crawling", "following", "login"].includes(s.state);
   $("fl-check").disabled = s.state !== "idle";
   $("btn-update").disabled = s.state !== "idle";
   $("base-tag").textContent = "base: " + (s.base || "chưa cài");
@@ -1032,7 +1034,7 @@ function renderLogin() {
   $("login-hint").textContent = login.type === "cookie"
     ? "Dán cookie của từng nền tảng (lấy từ trình duyệt đã đăng nhập). Crawl nền tảng nào thì cần cookie của nền tảng đó."
     : "Khi crawl, app mở cửa sổ Chrome riêng cho mỗi nền tảng. Lần đầu đăng nhập trong cửa sổ đó (QR, SMS hay mật khẩu đều được); các lần sau app dùng lại phiên cũ. " +
-      "Nếu nền tảng báo phiên không còn hợp lệ, app dừng và KHÔNG tự đăng nhập lại (tránh bị khóa vì nghi bot): kiểm tra tài khoản rồi bấm “Đăng nhập lại” bên dưới.";
+      "Bấm “Đăng nhập” bên dưới để đăng nhập một lần (app tự kiểm tra phiên được giữ). Nếu sau này nền tảng báo phiên hết hạn, app dừng và KHÔNG tự đăng nhập lại (tránh bị khóa vì nghi bot): kiểm tra tài khoản rồi bấm “Đăng nhập lại”.";
   const list = $("cookie-list");
   list.hidden = login.type !== "cookie";
   list.replaceChildren();
@@ -1073,19 +1075,32 @@ function renderLogin() {
     name.append(dot, p.name);
     const has = (login.sessions || []).includes(code);
     const chip = el("span", "chip" + (has ? " ok" : ""), has ? "đã đăng nhập" : "chưa đăng nhập");
-    const relogin = el("button", "btn sm", "Đăng nhập lại");
-    relogin.disabled = !has;
-    relogin.title = "Lần crawl tới sẽ mở đăng nhập mới cho " + p.name;
-    relogin.onclick = async () => {
-      const ok = await confirmBox(`Đăng nhập lại ${p.name}?`,
-        "Chỉ làm khi chắc chắn phiên đã hết hạn (đã kiểm tra tài khoản trên điện thoại vẫn bình thường). " +
-        "Đăng nhập lặp lại nhiều lần dễ bị nền tảng coi là bot và khóa tài khoản.");
-      if (!ok) return;
-      state.login = await api().reset_session(code);
-      renderLogin();
-      toast(`Lần crawl tới sẽ đăng nhập lại ${p.name}`);
+    const runLogin = async (verifyOnly) => {
+      const res = await api().login_platform(code, verifyOnly);
+      if (res.error) return toast(res.error, true);
+      $("logbox").classList.add("open");
+      toast(verifyOnly ? `Đang kiểm tra phiên ${p.name}...` : `Đã mở Chrome để đăng nhập ${p.name}. Xem tiến độ ở Nhật ký (tab Crawl).`);
     };
-    row.append(name, chip, relogin);
+    const buttons = el("div", "row-inline");
+    if (!has) {
+      const login = el("button", "btn sm primary", "Đăng nhập");
+      login.title = "Mở Chrome riêng của app để đăng nhập " + p.name + " một lần";
+      login.onclick = () => runLogin(false);
+      buttons.append(login);
+    } else {
+      const verify = el("button", "btn sm", "Kiểm tra phiên");
+      verify.title = "Mở Chrome ẩn, xem phiên đăng nhập còn hiệu lực không (không đăng nhập mới)";
+      verify.onclick = () => runLogin(true);
+      const relogin = el("button", "btn sm", "Đăng nhập lại");
+      relogin.onclick = async () => {
+        const ok = await confirmBox(`Đăng nhập lại ${p.name}?`,
+          "Chỉ làm khi chắc chắn phiên đã hết hạn (đã kiểm tra tài khoản trên điện thoại vẫn bình thường). " +
+          "Đăng nhập lặp lại nhiều lần dễ bị nền tảng coi là bot và khóa tài khoản.");
+        if (ok) runLogin(false);
+      };
+      buttons.append(verify, relogin);
+    }
+    row.append(name, chip, buttons);
     sessions.append(row);
   }
 }

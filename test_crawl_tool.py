@@ -351,6 +351,59 @@ def test_follow_check_end_to_end():
             ct.BASE_DIR, ct.uv_path, ct.save_settings, ct.telegram_call, ct.download_thumb = old
 
 
+def test_login_button_flow():
+    """Nút Đăng nhập: chạy base ở chế độ chỉ đăng nhập, rồi chạy lại (ẩn) để xem phiên có được giữ không."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base, bd = Path(tmp) / "base", Path(tmp) / "bd"
+        base.mkdir()
+        bd.mkdir()
+        mode = Path(tmp) / "mode.txt"  # crawler giả: "ok" | "lost" (mất phiên khi mở lại) | "fail"
+        (base / "run").write_text("\n".join([
+            "import os, sys, pathlib",
+            f"mode = pathlib.Path(r'{mode}').read_text()",
+            "headless = sys.argv[sys.argv.index('--headless') + 1] == 'true'",
+            "assert os.environ['MEDIACRAWLER_LOGIN_ONLY'] == '1'",
+            "print('headless' if headless else 'window')",
+            "if mode == 'ok' or (mode == 'lost' and not headless):",
+            "    print('[Đăng nhập] Douyin: LOGIN_OK')",
+        ]), encoding="utf-8")
+        old = ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.uv_path
+        ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.uv_path = base, bd, lambda: sys.executable
+        try:
+            api = ct.Api()
+            api._settings = {"data_dir": str(Path(tmp) / "data")}
+            (bd / "dy.logged_in").write_text("1")
+
+            def run(verify_only):
+                api._lines.clear()
+                assert api.login_platform("dy", verify_only) == {"ok": True}
+                assert api.login_platform("dy", verify_only)["error"]  # đang bận
+                began = time.time()
+                while api._state != "idle" and time.time() - began < 20:
+                    time.sleep(0.1)
+                return "\n".join(api._lines)
+
+            mode.write_text("ok")
+            log = run(False)
+            assert "window" in log and "headless" in log and "phiên đăng nhập được giữ" in log
+            assert not (bd / "dy.logged_in").exists()  # bấm Đăng nhập thì bỏ dấu cũ (base ghi lại khi LOGIN_OK)
+
+            mode.write_text("lost")
+            log = run(False)
+            assert "KHÔNG còn sau khi đóng Chrome" in log
+
+            mode.write_text("fail")
+            log = run(False)
+            assert "Chưa đăng nhập được" in log and "headless" not in log  # không đăng nhập được thì không kiểm tra lại
+
+            mode.write_text("ok")
+            log = run(True)  # Kiểm tra phiên: chỉ chạy ẩn
+            assert "window" not in log and "phiên đăng nhập được giữ" in log
+            assert api.login_platform("nope")["error"]
+        finally:
+            ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.uv_path = old
+
+
 def test_old_form_migrates():
     api = ct.Api()
     api._settings = {"form": {"platform": "dy", "crawl_type": "search"}}
@@ -480,6 +533,7 @@ if __name__ == "__main__":
     test_saved_library_and_live_refresh()
     test_follow_logic()
     test_follow_check_end_to_end()
+    test_login_button_flow()
     test_old_form_migrates()
     test_parse()
     test_normalize_and_library()

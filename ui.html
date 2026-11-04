@@ -227,7 +227,13 @@
   .kw-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 240px; overflow-y: auto; }
   .kw-list button { border: 1px solid var(--border); background: var(--panel); border-radius: 99px; height: 30px; padding: 0 12px; cursor: pointer; font-weight: 600; color: var(--muted); }
   .kw-list button.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-  .modal .row { display: grid; grid-template-columns: 1fr 90px; gap: 8px; }
+  .modal.ai-modal { width: 700px; max-height: calc(100vh - 40px); overflow-y: auto; gap: 12px; }
+  .seg.tags button { height: 28px; padding: 0 10px; font-size: 12.5px; }
+  .ai-run-row { display: flex; align-items: center; gap: 8px; }
+  .ai-run-row input { width: 80px; }
+  .kw-list button { height: auto; min-height: 30px; padding: 4px 12px; display: inline-flex; align-items: baseline; gap: 6px; }
+  .kw-list .mean { font-weight: 500; font-size: 12px; color: var(--faint); }
+  .kw-list button.on .mean { color: inherit; opacity: .75; }
   .setting.danger { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
 
   /* ---------- Hộp thoại & thông báo ---------- */
@@ -276,7 +282,7 @@
         <div class="field"><span class="label">Kiểu crawl</span><div class="seg" id="seg-type"></div></div>
         <div class="field">
           <div class="label-row"><span class="label" id="targets-label">Từ khóa</span>
-            <button class="btn ai" id="btn-ai" type="button">✨ Gợi ý bằng Gemini</button></div>
+            <button class="btn ai" id="btn-ai" type="button">✨ Tạo từ khóa theo chủ đề</button></div>
           <textarea id="targets" spellcheck="false"></textarea>
           <span class="hint" id="targets-hint">Mỗi dòng một từ khóa.</span>
         </div>
@@ -381,18 +387,27 @@
 
 <!-- Hộp thoại gợi ý từ khóa bằng Gemini -->
 <div class="overlay" id="ai-modal">
-  <div class="card modal" style="width: 560px">
-    <h2>✨ Gợi ý từ khóa bằng Gemini</h2>
-    <p>Mô tả loại video cần tìm (tiếng Việt cũng được). Gemini sẽ đưa ra từ khóa tiếng Trung mà người dùng các nền tảng hay tìm.</p>
-    <div class="row">
-      <input type="text" id="ai-topic" placeholder="Ví dụ: phim bộ AI cổ trang, nữ chính trọng sinh báo thù">
-      <input type="number" id="ai-count" min="3" max="30" value="12" title="Số từ khóa">
+  <div class="card modal ai-modal">
+    <h2>✨ Chủ đề tìm kiếm</h2>
+    <p>Mô tả càng chi tiết (bối cảnh, nhân vật, cốt truyện, cảm xúc, kiểu video) thì từ khóa càng sát. Viết tiếng Việt được: Gemini tạo từ khóa tiếng Trung kèm nghĩa tiếng Việt.</p>
+    <label class="field"><span class="label">Mô tả chi tiết</span>
+      <textarea id="ai-desc" rows="3" placeholder="VD: phim bộ hoạt hình AI cổ trang nhiều tập, nữ chính trọng sinh về thời thiếu nữ để báo thù gia tộc, nam chính là vương gia lạnh lùng, nhịp nhanh, nhiều cảnh vả mặt"></textarea></label>
+    <div class="field"><span class="label">Thể loại</span><div class="seg tags" id="ai-genres"></div></div>
+    <div class="field"><span class="label">Phong cách hình ảnh</span><div class="seg tags" id="ai-styles"></div></div>
+    <div class="field"><span class="label">Khán giả</span><div class="seg tags" id="ai-audience"></div></div>
+    <div class="row2">
+      <label class="field"><span class="label">Bắt buộc liên quan</span><input type="text" id="ai-include" placeholder="VD: trọn bộ, nhiều tập, 全集"></label>
+      <label class="field"><span class="label">Loại trừ</span><input type="text" id="ai-exclude" placeholder="VD: phim người đóng, review, reaction"></label>
+    </div>
+    <div class="ai-run-row">
+      <span class="label">Số từ khóa</span><input type="number" id="ai-count" min="3" max="30" value="12">
+      <div class="spacer"></div>
+      <button class="btn primary" id="ai-run">✨ Tạo từ khóa</button>
     </div>
     <div class="kw-list" id="ai-list"></div>
     <div class="error" id="ai-error"></div>
     <div class="acts">
       <button class="btn" id="ai-close">Đóng</button>
-      <button class="btn" id="ai-run">Tạo từ khóa</button>
       <button class="btn primary" id="ai-add" disabled>Thêm vào ô từ khóa</button>
     </div>
   </div>
@@ -883,11 +898,54 @@ $("btn-gem-save").onclick = async () => {
 };
 $("btn-gem-clear").onclick = async () => { renderGemini(await api().set_gemini(null, null, true)); toast("Đã xóa key Gemini"); };
 
-// ---------- Gợi ý từ khóa ----------
+// ---------- Chủ đề tìm kiếm -> từ khóa (Gemini) ----------
+// Nhãn tiếng Việt + cách gọi tiếng Trung, gửi cả hai cho Gemini để từ khóa sát thể loại
+const GENRES = [["Cổ trang", "古装"], ["Hiện đại / đô thị", "都市"], ["Tu tiên / huyền huyễn", "修仙玄幻"], ["Trọng sinh / xuyên không", "重生穿越"],
+  ["Báo thù / nghịch tập", "复仇逆袭"], ["Ngôn tình / ngọt sủng", "甜宠"], ["Tổng tài", "霸总"], ["Cung đấu / gia đấu", "宫斗宅斗"],
+  ["Hệ thống", "系统流"], ["Chiến thần / long vương", "战神"], ["Mạt thế / sinh tồn", "末世"], ["Huyền nghi / kinh dị", "悬疑"],
+  ["Hài hước", "搞笑"], ["Khoa học viễn tưởng", "科幻"]].map(([vi, zh]) => `${vi} (${zh})`);
+const STYLES = [["Anime 2D / manhua", "2D动漫"], ["3D", "3D动画"], ["Người thật (AI realistic)", "AI真人"],
+  ["Quốc phong / thủy mặc", "国风"], ["Chibi", "Q版"]].map(([vi, zh]) => `${vi} (${zh})`);
+const AUDIENCES = { "": "Tất cả", "Nữ (女频)": "Nữ (女频)", "Nam (男频)": "Nam (男频)" };
+state.aiTopic = { desc: "", genres: [], styles: [], audience: "", include: "", exclude: "" };
+
+function tagGroup(id, values, multi) {
+  const box = $(id);
+  box.replaceChildren();
+  for (const [value, label] of values) {
+    const b = el("button", "", label);
+    b.type = "button";
+    b.dataset.value = value;
+    b.onclick = () => {
+      if (!multi) box.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+      b.classList.toggle("on", multi ? !b.classList.contains("on") : true);
+    };
+    box.append(b);
+  }
+}
+tagGroup("ai-genres", GENRES.map((g) => [g, g.replace(/ \(.*\)$/, "")]), true);
+tagGroup("ai-styles", STYLES.map((g) => [g, g.replace(/ \(.*\)$/, "")]), true);
+tagGroup("ai-audience", Object.entries(AUDIENCES), false);
+const picked = (id) => [...$(id).querySelectorAll(".on")].map((b) => b.dataset.value);
+function readTopic() {
+  return {
+    desc: $("ai-desc").value, genres: picked("ai-genres"), styles: picked("ai-styles"),
+    audience: picked("ai-audience")[0] || "", include: $("ai-include").value, exclude: $("ai-exclude").value,
+  };
+}
+function fillTopic(t) {
+  $("ai-desc").value = t.desc || "";
+  $("ai-include").value = t.include || "";
+  $("ai-exclude").value = t.exclude || "";
+  for (const [id, values] of [["ai-genres", t.genres || []], ["ai-styles", t.styles || []], ["ai-audience", [t.audience || ""]]]) {
+    $(id).querySelectorAll("button").forEach((b) => b.classList.toggle("on", values.includes(b.dataset.value)));
+  }
+}
 function openAiModal() {
   $("ai-error").textContent = "";
+  fillTopic(state.aiTopic);
   $("ai-modal").classList.add("open");
-  setTimeout(() => $("ai-topic").focus(), 50);
+  setTimeout(() => $("ai-desc").focus(), 50);
 }
 $("btn-ai").onclick = () => {
   if (!state.gemini?.has_key) {
@@ -898,33 +956,36 @@ $("btn-ai").onclick = () => {
   openAiModal();
 };
 $("ai-close").onclick = () => $("ai-modal").classList.remove("open");
-$("ai-topic").onkeydown = (e) => e.key === "Enter" && $("ai-run").click();
 $("ai-run").onclick = async () => {
   const btn = $("ai-run");
   btn.disabled = true;
   btn.textContent = "Đang tạo...";
   $("ai-error").textContent = "";
   try {
-    const res = await api().suggest_keywords($("ai-topic").value, $("ai-count").value, state.form.platforms);
+    state.aiTopic = readTopic();
+    const res = await api().suggest_keywords(state.aiTopic, $("ai-count").value, state.form.platforms);
     if (res.error === "need_key") { $("ai-error").textContent = "Chưa có Gemini API key: vào Cài đặt để nhập."; return; }
     if (res.error) { $("ai-error").textContent = res.error; return; }
     const list = $("ai-list");
     list.replaceChildren(...res.keywords.map((kw) => {
-      const b = el("button", "on", kw);  // mặc định chọn hết, bấm để bỏ
+      const b = el("button", "on");  // mặc định chọn hết, bấm để bỏ
       b.type = "button";
+      b.dataset.kw = kw.keyword;
+      b.title = kw.meaning;
+      b.append(el("b", "", kw.keyword), el("span", "mean", kw.meaning));
       b.onclick = () => { b.classList.toggle("on"); $("ai-add").disabled = !list.querySelector(".on"); };
       return b;
     }));
     $("ai-add").disabled = !res.keywords.length;
   } finally {
     btn.disabled = false;
-    btn.textContent = "Tạo lại";
+    btn.textContent = "✨ Tạo lại";
   }
 };
 $("ai-add").onclick = () => {
-  const picked = [...$("ai-list").querySelectorAll(".on")].map((b) => b.textContent);
+  const chosen = [...$("ai-list").querySelectorAll(".on")].map((b) => b.dataset.kw);
   const current = $("targets").value.split(/[\n,]/).map((t) => t.trim()).filter(Boolean);
-  const merged = [...new Set([...current, ...picked])];
+  const merged = [...new Set([...current, ...chosen])];
   $("targets").value = merged.join("\n");
   $("ai-modal").classList.remove("open");
   toast(`Đã thêm ${merged.length - current.length} từ khóa`);
@@ -971,6 +1032,7 @@ window.addEventListener("pywebviewready", async () => {
   state.login = info.login;
   renderLogin();
   renderGemini(info.gemini);
+  state.aiTopic = info.ai_topic;
   appendLog(info.warnings.map((w) => "[CẢNH BÁO] " + w));
   if (info.has_token) api().check_update();
   else openTokenModal();

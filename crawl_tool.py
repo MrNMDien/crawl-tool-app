@@ -234,36 +234,83 @@ def build_args(values: dict, data_dir: str) -> list:
     return args
 
 
+TOPIC_FIELDS = {"desc": 1500, "include": 200, "exclude": 200, "audience": 40}  # trường chữ -> độ dài tối đa
+TOPIC_LISTS = ("genres", "styles")
+
+
+def clean_topic(raw) -> dict:
+    """Chủ đề tìm kiếm từ giao diện: chỉ giữ các trường biết trước, cắt độ dài."""
+    if isinstance(raw, str):  # bản cũ chỉ gửi một câu mô tả
+        raw = {"desc": raw}
+    raw = raw if isinstance(raw, dict) else {}
+    topic = {k: str(raw.get(k) or "").strip()[:limit] for k, limit in TOPIC_FIELDS.items()}
+    for k in TOPIC_LISTS:
+        values = raw.get(k) if isinstance(raw.get(k), list) else []
+        topic[k] = [str(v).strip()[:40] for v in values if str(v).strip()][:15]
+    return topic
+
+
+def topic_prompt(topic: dict, count: int, platforms: list) -> str:
+    names = ", ".join(PLATFORM_NAMES.get(p, p) for p in platforms) or "Douyin, Xiaohongshu, Bilibili, Kuaishou"
+    lines = [f"- Mô tả chi tiết: {topic['desc'] or '(không có)'}"]
+    if topic["genres"]:
+        lines.append("- Thể loại: " + ", ".join(topic["genres"]))
+    if topic["styles"]:
+        lines.append("- Phong cách hình ảnh: " + ", ".join(topic["styles"]))
+    if topic["audience"]:
+        lines.append(f"- Khán giả chính: {topic['audience']}")
+    if topic["include"]:
+        lines.append(f"- Từ/ý bắt buộc liên quan: {topic['include']}")
+    if topic["exclude"]:
+        lines.append(f"- Loại trừ (không tạo từ khóa dẫn tới nội dung này): {topic['exclude']}")
+    return (
+        f"Bạn là chuyên gia SEO tìm kiếm nội dung video trên mạng xã hội Trung Quốc ({names}).\n"
+        f"Nhiệm vụ: tạo đúng {count} từ khóa tìm kiếm bằng tiếng Trung giản thể để tìm đúng loại video sau:\n"
+        + "\n".join(lines) + "\n\n"
+        "Yêu cầu:\n"
+        "1. Dùng đúng cách người dùng Trung Quốc thực sự gõ tìm trên các nền tảng này: từ khóa tìm kiếm, "
+        "tên hashtag/话题 phổ biến, cách gọi và tiếng lóng đang thịnh hành của thể loại.\n"
+        "2. Phối hợp: vài từ khóa rộng có lượng tìm cao, còn lại là từ khóa dài (long-tail) bám sát mô tả, "
+        "thể loại, phong cách và khán giả ở trên.\n"
+        "3. Mỗi từ khóa 2-12 chữ, không trùng ý nhau, không chứa dấu phẩy, không đánh số.\n"
+        "4. Kèm nghĩa tiếng Việt ngắn gọn (dưới 12 chữ) cho mỗi từ khóa.\n"
+        'Trả về mảng JSON dạng [{"keyword": "...", "meaning_vi": "..."}].'
+    )
+
+
 def clean_keywords(raw, count: int) -> list:
-    """Lọc danh sách từ khóa Gemini trả về: chuỗi ngắn, không xuống dòng/dấu phẩy (dấu phẩy là ký tự tách từ khóa của base)."""
-    result = []
-    for kw in raw if isinstance(raw, list) else []:
-        if not isinstance(kw, str):
+    """Lọc từ khóa Gemini trả về -> [{"keyword", "meaning"}]: ngắn, không xuống dòng/dấu phẩy
+    (dấu phẩy là ký tự tách từ khóa của base), không trùng."""
+    result, seen = [], set()
+    for entry in raw if isinstance(raw, list) else []:
+        if isinstance(entry, str):
+            entry = {"keyword": entry}
+        if not isinstance(entry, dict) or not isinstance(entry.get("keyword"), str):
             continue
-        kw = re.sub(r"[\s,，]+", " ", kw).strip()
-        if kw and len(kw) <= 40 and kw not in result:
-            result.append(kw)
+        kw = re.sub(r"[\s,，]+", " ", entry["keyword"]).strip()
+        meaning = re.sub(r"\s+", " ", str(entry.get("meaning_vi") or "")).strip()[:60]
+        if kw and len(kw) <= 40 and kw not in seen:
+            seen.add(kw)
+            result.append({"keyword": kw, "meaning": meaning})
     return result[:count]
 
 
-def gemini_keywords(api_key: str, model: str, topic: str, count: int, platforms: list) -> list:
-    """Nhờ Gemini gợi ý từ khóa tìm kiếm tiếng Trung cho một chủ đề."""
+def gemini_keywords(api_key: str, model: str, topic, count: int, platforms: list) -> list:
+    """Nhờ Gemini gợi ý từ khóa tìm kiếm tiếng Trung (kèm nghĩa tiếng Việt) cho một chủ đề."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", model or ""):
         raise ValueError("Tên model Gemini không hợp lệ")
-    names = ", ".join(PLATFORM_NAMES.get(p, p) for p in platforms) or "Douyin, Xiaohongshu, Bilibili, Kuaishou"
-    prompt = (
-        f"Bạn là chuyên gia tìm nội dung trên mạng xã hội Trung Quốc ({names}).\n"
-        f"Chủ đề người dùng cần tìm: {topic}\n\n"
-        f"Hãy đưa ra đúng {count} từ khóa tìm kiếm bằng tiếng Trung giản thể mà người dùng Trung Quốc thực sự gõ "
-        "trên các nền tảng này để tìm đúng loại video đó. Mỗi từ khóa ngắn (2-10 chữ), không trùng nghĩa nhau, "
-        "kết hợp từ khóa chung, từ khóa cụ thể theo thể loại/nội dung và cách gọi đang thịnh hành. "
-        "Không đánh số, không giải thích. Trả về mảng JSON các chuỗi."
-    )
     body = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"parts": [{"text": topic_prompt(clean_topic(topic), count, platforms)}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "responseSchema": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "responseSchema": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {"keyword": {"type": "STRING"}, "meaning_vi": {"type": "STRING"}},
+                    "required": ["keyword", "meaning_vi"],
+                },
+            },
             "temperature": 0.9,
         },
     }
@@ -656,6 +703,7 @@ class Api:
         return {
             "form": form, "data_dir": self._data_dir(), "has_token": bool(self._settings.get("token")),
             "warnings": warnings, "repo": BASE_REPO, "login": self.get_login(), "gemini": self.get_gemini(),
+            "ai_topic": clean_topic(self._settings.get("ai_topic")),
         }
 
     # --- đăng nhập (trong Cài đặt) ---
@@ -722,10 +770,12 @@ class Api:
         save_settings(self._settings)
         return self.get_gemini()
 
-    def suggest_keywords(self, topic, count=10, platforms=None) -> dict:
-        topic = str(topic or "").strip()[:500]
-        if not topic:
-            return {"error": "Nhập chủ đề cần tìm"}
+    def suggest_keywords(self, topic, count=12, platforms=None) -> dict:
+        topic = clean_topic(topic)
+        if not (topic["desc"] or topic["genres"]):
+            return {"error": "Nhập mô tả chủ đề hoặc chọn ít nhất một thể loại"}
+        self._settings["ai_topic"] = topic  # nhớ chủ đề cho lần sau
+        save_settings(self._settings)
         gemini = self._settings.get("gemini") or {}
         if not self.get_gemini()["enabled"]:
             return {"error": "Gợi ý từ khóa bằng AI đang tắt (bật lại trong Cài đặt)"}

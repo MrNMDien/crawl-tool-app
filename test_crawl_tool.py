@@ -102,9 +102,18 @@ def test_login_settings():
 
 
 def test_gemini_keywords():
-    assert ct.clean_keywords(["AI短剧", " AI短剧 ", "AI, 漫剧", "a\nb", 5, "x" * 41, ""], 10) == ["AI短剧", "AI 漫剧", "a b"]
+    kw = lambda k, m="": {"keyword": k, "meaning": m}
+    assert ct.clean_keywords(["AI短剧", " AI短剧 ", "AI, 漫剧", "a\nb", 5, "x" * 41, ""], 10) == [kw("AI短剧"), kw("AI 漫剧"), kw("a b")]
+    assert ct.clean_keywords([{"keyword": "古风漫剧", "meaning_vi": " truyện tranh\ncổ phong "}, {"meaning_vi": "thiếu từ"}], 5) == [
+        kw("古风漫剧", "truyện tranh cổ phong")]
     assert ct.clean_keywords("not a list", 5) == []
-    assert ct.clean_keywords([str(i) for i in range(50)], 3) == ["0", "1", "2"]
+    assert [k["keyword"] for k in ct.clean_keywords([str(i) for i in range(50)], 3)] == ["0", "1", "2"]
+
+    topic = ct.clean_topic({"desc": " phim AI ", "genres": ["Cổ trang (古装)", "", 7], "styles": "nope", "audience": "Nữ (女频)",
+                            "exclude": "x" * 500, "evil": "ignored"})
+    assert topic == {"desc": "phim AI", "include": "", "exclude": "x" * 200, "audience": "Nữ (女频)",
+                     "genres": ["Cổ trang (古装)", "7"], "styles": []}
+    assert ct.clean_topic("chỉ một câu")["desc"] == "chỉ một câu"  # bản cũ gửi chuỗi
 
     sent = {}
 
@@ -121,17 +130,36 @@ def test_gemini_keywords():
     def fake_urlopen(req, timeout):
         sent["url"], sent["key"] = req.full_url, req.get_header("X-goog-api-key")
         sent["body"] = json.loads(req.data)
-        text = json.dumps(["AI短剧推荐", "AI漫剧", "AI漫剧"])
+        text = json.dumps([{"keyword": "AI短剧推荐", "meaning_vi": "phim ngắn AI đề cử"},
+                           {"keyword": "AI漫剧", "meaning_vi": "truyện tranh AI"}, {"keyword": "AI漫剧", "meaning_vi": "trùng"}])
         return FakeResp({"candidates": [{"content": {"parts": [{"text": text}]}}]})
 
     old = ct.urllib.request.urlopen
     ct.urllib.request.urlopen = fake_urlopen
     try:
-        kws = ct.gemini_keywords("KEY", "gemini-flash-latest", "phim bộ AI cổ trang", 5, ["dy", "xhs"])
-        assert kws == ["AI短剧推荐", "AI漫剧"]
+        topic = {"desc": "phim bộ AI cổ trang", "genres": ["Trọng sinh (重生穿越)"], "styles": ["Anime 2D (2D动漫)"],
+                 "audience": "Nữ (女频)", "include": "全集", "exclude": "phim người đóng"}
+        kws = ct.gemini_keywords("KEY", "gemini-flash-latest", topic, 5, ["dy", "xhs"])
+        assert kws == [kw("AI短剧推荐", "phim ngắn AI đề cử"), kw("AI漫剧", "truyện tranh AI")]
         assert sent["url"].endswith("/models/gemini-flash-latest:generateContent") and sent["key"] == "KEY"
-        assert "phim bộ AI cổ trang" in sent["body"]["contents"][0]["parts"][0]["text"]
-        assert "Douyin, Xiaohongshu" in sent["body"]["contents"][0]["parts"][0]["text"]
+        prompt = sent["body"]["contents"][0]["parts"][0]["text"]
+        for part in ("phim bộ AI cổ trang", "Douyin, Xiaohongshu", "Trọng sinh (重生穿越)", "Anime 2D (2D动漫)",
+                     "Nữ (女频)", "全集", "Loại trừ", "phim người đóng", "meaning_vi"):
+            assert part in prompt, part
+        assert sent["body"]["generationConfig"]["responseSchema"]["items"]["type"] == "OBJECT"
+
+        # Api: chủ đề trống bị chặn, chủ đề hợp lệ được nhớ cho lần sau
+        old_save = ct.save_settings
+        ct.save_settings = lambda settings: None
+        try:
+            api = ct.Api()
+            api._settings = {"gemini": {"key": ct.encrypt_token("KEY")}}
+            assert "Nhập mô tả" in api.suggest_keywords({"desc": " ", "genres": []})["error"]
+            res = api.suggest_keywords(topic, 2, ["dy", "evil"])
+            assert [k["keyword"] for k in res["keywords"]] == ["AI短剧推荐", "AI漫剧"]
+            assert api.init()["ai_topic"]["desc"] == "phim bộ AI cổ trang"
+        finally:
+            ct.save_settings = old_save
         try:
             ct.gemini_keywords("KEY", "../x", "t", 5, [])
         except ValueError:

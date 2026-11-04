@@ -307,8 +307,8 @@ class App:
         self.log.pack(fill="both", expand=True, padx=10, pady=10)
 
         self.root.after(100, self.drain_log)
-        self.write("Lưu ý: crawl Douyin/Xiaohongshu cần mở Chrome và bật chrome://inspect/#remote-debugging "
-                   "(tick 'Allow remote debugging for this browser instance').")
+        self.write("Khi crawl, app tự mở một cửa sổ Chrome riêng (không đụng Chrome cá nhân). "
+                   "Lần đầu hãy quét mã QR đăng nhập trong cửa sổ đó, các lần sau app nhớ phiên đăng nhập.")
         if not find_chrome():
             self.write("[CẢNH BÁO] Không thấy Google Chrome. Hãy cài Chrome bản mới nhất.")
         if not shutil.which("node"):

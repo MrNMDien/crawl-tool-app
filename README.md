@@ -14,7 +14,7 @@ App **không chứa** base code. Mỗi lần mở, app hỏi GitHub commit mới
 ## Cài trên máy người dùng
 
 Máy cần có:
-- **Google Chrome** bản mới nhất. Vào `chrome://inspect/#remote-debugging` và tick *Allow remote debugging for this browser instance*.
+- **Google Chrome** bản mới nhất. App tự mở một cửa sổ Chrome riêng (hồ sơ riêng), không đụng vào Chrome cá nhân.
 - **Node.js** (https://nodejs.org), bắt buộc với Douyin và Zhihu.
 - **GitHub token** chỉ đọc repo base: GitHub → Settings → Developer settings → Fine-grained tokens → chọn repo `MediaCrawler`, quyền *Contents: Read-only*.
 

@@ -269,6 +269,11 @@
   #ctx button:hover:not(:disabled) { background: var(--hover); }
   #ctx button:disabled { opacity: .4; cursor: default; }
   #ctx kbd { color: var(--faint); font: inherit; font-size: 12px; }
+  .update-bar { display: flex; align-items: center; gap: 10px; padding: 8px 20px; flex: none; background: var(--accent-soft); border-bottom: 1px solid var(--border); font-size: 13.5px; }
+  .update-bar .hint { margin-left: 6px; }
+  .paste-wrap { display: flex; gap: 6px; align-items: stretch; min-width: 0; }
+  .paste-wrap > input, .paste-wrap > textarea { flex: 1; min-width: 0; }
+  .paste-wrap > .paste-btn { height: auto; min-height: 34px; flex: none; }
   #toast {
     position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
     background: var(--text); color: var(--panel); padding: 9px 16px; border-radius: 10px; font-weight: 600; font-size: 13px;
@@ -296,6 +301,12 @@
   <div class="status" id="status"><span class="dot"></span><span id="status-text">Sẵn sàng</span></div>
 </header>
 
+<div class="update-bar" id="update-bar" hidden>
+  <span>🎉 Có bản CrawlTool mới <b id="upd-ver"></b><span class="hint" id="upd-notes"></span></span>
+  <div class="spacer"></div>
+  <button class="btn sm primary" id="upd-now" type="button">Cập nhật &amp; khởi động lại</button>
+  <button class="btn sm" id="upd-later" type="button">Để sau</button>
+</div>
 <main>
   <!-- ===== Tab Crawl: form + kết quả + nhật ký ===== -->
   <section class="view active" id="view-crawl">
@@ -308,7 +319,7 @@
         <div class="field">
           <div class="label-row"><span class="label" id="targets-label">Từ khóa</span>
             <button class="btn ai" id="btn-ai" type="button">✨ Tạo từ khóa theo chủ đề</button></div>
-          <textarea id="targets" spellcheck="false"></textarea>
+          <textarea id="targets" data-paste spellcheck="false"></textarea>
           <span class="hint" id="targets-hint">Mỗi dòng một từ khóa.</span>
         </div>
         <div class="login-line">Đăng nhập: <b id="login-summary">—</b> · <button class="link" id="btn-login-settings" type="button">đổi trong Cài đặt</button></div>
@@ -358,12 +369,12 @@
       <div class="form-scroll">
         <div class="section-title">Thêm kênh</div>
         <div class="field"><span class="label">Tìm kênh Douyin theo tên</span>
-          <div class="tg-row"><input type="text" id="fl-q" placeholder="VD: AI短剧, 漫剧 hoặc tên kênh" spellcheck="false">
+          <div class="tg-row"><input type="text" id="fl-q" data-paste placeholder="VD: AI短剧, 漫剧 hoặc tên kênh" spellcheck="false">
             <button class="btn" id="fl-search" type="button">Tìm</button></div>
           <span class="hint" id="fl-search-hint">App mở Douyin (cửa sổ Chrome riêng) để tìm, mất khoảng 10–30 giây.</span></div>
         <div class="user-results" id="fl-results"></div>
         <label class="field"><span class="label">Hoặc dán link trang kênh</span>
-          <input type="text" id="fl-url" placeholder="Dán link kênh hoặc đoạn chia sẻ từ app Douyin" spellcheck="false"></label>
+          <input type="text" id="fl-url" data-paste placeholder="Dán link kênh hoặc đoạn chia sẻ từ app Douyin" spellcheck="false"></label>
         <label class="field"><span class="label">Tên gợi nhớ (không bắt buộc)</span><input type="text" id="fl-name" placeholder="VD: Kênh phim AI cổ trang"></label>
         <button class="btn primary" id="fl-add" type="button">+ Theo dõi kênh</button>
         <span class="hint">App Douyin: mở trang kênh → ⋯ → Chia sẻ → Sao chép liên kết. Lần kiểm tra đầu chỉ ghi nhận video hiện có; từ lần sau mới báo video mới.</span>
@@ -406,7 +417,7 @@
           <li>Mở bot vừa tạo, bấm <b>Start</b> (hoặc nhắn bất kỳ), rồi bấm <b>Lấy chat ID</b>.</li>
           <li>Bấm <b>Gửi thử</b> để kiểm tra.</li>
         </ol>
-        <div class="tg-row"><input type="password" id="tg-token" placeholder="Bot token (dạng 123456789:AA...)" autocomplete="off"><button class="btn" id="tg-save">Lưu</button></div>
+        <div class="tg-row"><input type="password" id="tg-token" data-paste placeholder="Bot token (dạng 123456789:AA...)" autocomplete="off"><button class="btn" id="tg-save">Lưu</button></div>
         <div class="row-inline">
           <button class="btn sm" id="tg-chat">Lấy chat ID</button>
           <button class="btn sm" id="tg-test">Gửi thử</button>
@@ -422,7 +433,7 @@
         <label class="switch"><span class="text"><b>Dùng AI gợi ý từ khóa</b><span class="hint">Tắt thì ẩn nút ✨ Gợi ý bằng Gemini ở tab Crawl, app không gọi Gemini</span></span><input type="checkbox" id="gem-enabled"><span class="track"></span></label>
         <div id="gem-fields" style="display: flex; flex-direction: column; gap: 10px">
           <div class="gem-row">
-            <input type="password" id="gem-key" placeholder="Dán API key (để trống nếu giữ key cũ)" autocomplete="off">
+            <input type="password" id="gem-key" data-paste placeholder="Dán API key (để trống nếu giữ key cũ)" autocomplete="off">
             <input type="text" id="gem-model" placeholder="Model" spellcheck="false">
             <button class="btn" id="btn-gem-save">Lưu</button>
           </div>
@@ -434,7 +445,7 @@
         <div class="acts"><button class="btn sm" id="btn-open-dir">Mở</button><button class="btn sm" id="btn-choose-dir">Đổi thư mục</button></div>
       </div>
       <div class="card setting">
-        <div class="info"><h3>Base code</h3><p>Phiên bản <code id="base-ver">—</code> · tự cập nhật từ <code id="repo">—</code> mỗi lần mở app</p></div>
+        <div class="info"><h3>Base code</h3><p>App <code id="app-ver">—</code> · base <code id="base-ver">—</code> · tự cập nhật từ <code id="repo">—</code> mỗi lần mở app</p></div>
         <div class="acts"><button class="btn sm" id="btn-update">Kiểm tra cập nhật</button></div>
       </div>
       <div class="card setting">
@@ -459,7 +470,7 @@
       <li>Repository access: chỉ chọn repo <b>MediaCrawler</b></li>
       <li>Permissions: <b>Contents → Read-only</b></li>
     </ol>
-    <input type="password" id="token-input" placeholder="github_pat_..." autocomplete="off">
+    <input type="password" id="token-input" data-paste placeholder="github_pat_..." autocomplete="off">
     <div class="error" id="token-error"></div>
     <div class="acts"><button class="btn" id="token-cancel">Để sau</button><button class="btn primary" id="token-save">Lưu và tải base code</button></div>
   </div>
@@ -1056,7 +1067,7 @@ function appendLog(lines) {
 }
 
 // ---------- Trạng thái ----------
-const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl", following: "Đang kiểm tra kênh theo dõi", login: "Đang đăng nhập", searching: "Đang tìm kênh" };
+const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl", following: "Đang kiểm tra kênh theo dõi", login: "Đang đăng nhập", searching: "Đang tìm kênh", app_updating: "Đang cập nhật app" };
 function applyState(s) {
   const wasCrawling = state.busyState === "crawling" || state.busyState === "following";
   state.busyState = s.state;
@@ -1067,7 +1078,13 @@ function applyState(s) {
   $("btn-stop").disabled = !["crawling", "following", "login"].includes(s.state);
   $("fl-check").disabled = s.state !== "idle";
   $("btn-update").disabled = s.state !== "idle";
-  $("base-tag").textContent = "base: " + (s.base || "chưa cài");
+  $("base-tag").textContent = `app v${state.appVersion || "?"} · base ${s.base || "chưa cài"}`;
+  const upd = s.app_update;
+  $("update-bar").hidden = !upd || upd.version === state.dismissedUpdate;
+  if (upd) {
+    $("upd-ver").textContent = "v" + upd.version;
+    $("upd-notes").textContent = upd.notes ? "· " + upd.notes.split("\n")[0].slice(0, 120) : "";
+  }
   $("base-ver").textContent = s.base || "chưa cài";
   if (s.lib_rev !== state.libRev) {
     state.libRev = s.lib_rev;
@@ -1106,6 +1123,7 @@ function renderLogin() {
     const has = login.saved.includes(code);
     const chip = el("span", "chip" + (has ? " ok" : ""), has ? "đã lưu" : "chưa có");
     const input = el("input");
+    input.dataset.paste = "";
     input.type = "password";
     input.placeholder = has ? "Dán cookie mới để thay" : "Dán cookie...";
     const save = el("button", "btn sm", "Lưu");
@@ -1347,12 +1365,7 @@ document.addEventListener("contextmenu", (e) => {
   if (field) items.push(ctxItem("Cắt", "Ctrl+X", !!selected && !secret, async () => { await api().copy(selected); insertText(field, ""); }));
   items.push(ctxItem("Copy", "Ctrl+C", !!selected && !secret, async () => { await api().copy(selected); toast("Đã copy"); }));
   if (field) {
-    items.push(ctxItem("Dán", "Ctrl+V", true, async () => {
-      const res = await api().read_clipboard();
-      if (res.error) return toast(res.error, true);
-      if (!res.text) return toast("Clipboard không có chữ để dán", true);
-      insertText(field, field.tagName === "INPUT" ? res.text.replace(/\s*\r?\n\s*/g, " ") : res.text);
-    }));
+    items.push(ctxItem("Dán", "Ctrl+V", true, () => pasteInto(field, false)));
     items.push(ctxItem("Chọn tất cả", "Ctrl+A", !!field.value, () => { field.focus(); field.select(); }));
   }
   if (!items.some((b) => !b.disabled)) return closeCtx();
@@ -1366,12 +1379,64 @@ document.addEventListener("mousedown", (e) => { if (!ctx.contains(e.target)) clo
 document.addEventListener("keydown", (e) => e.key === "Escape" && closeCtx());
 window.addEventListener("blur", closeCtx);
 
+// ---------- Dán / copy bằng phím tắt và nút Dán ----------
+// Không dựa vào clipboard của WebView2 (có máy không dán được): app tự đọc/ghi clipboard Windows qua Python.
+async function pasteInto(field, replaceAll) {
+  const res = await api().read_clipboard();
+  if (res.error) return toast(res.error, true);
+  if (!res.text) return toast("Clipboard không có chữ để dán", true);
+  const text = field.tagName === "INPUT" ? res.text.replace(/\s*\r?\n\s*/g, " ").trim() : res.text;
+  if (replaceAll) field.value = "";
+  insertText(field, text);
+}
+function attachPaste(field) {
+  if (field.dataset.pasteReady) return;
+  field.dataset.pasteReady = "1";
+  const wrap = el("span", "paste-wrap");
+  const btn = el("button", "btn sm paste-btn", "Dán");
+  btn.type = "button";
+  btn.title = "Dán từ clipboard (hoặc Ctrl+V, chuột phải → Dán)";
+  btn.onclick = () => pasteInto(field, field.tagName === "INPUT");
+  field.replaceWith(wrap);
+  wrap.append(field, btn);
+}
+document.querySelectorAll("[data-paste]").forEach(attachPaste);
+new MutationObserver(() => document.querySelectorAll("[data-paste]:not([data-paste-ready])").forEach(attachPaste))
+  .observe(document.body, { childList: true, subtree: true });
+document.addEventListener("keydown", async (e) => {
+  if (!e.ctrlKey || e.altKey || e.metaKey) return;
+  const key = e.key.toLowerCase();
+  const field = e.target.closest?.('input[type=text], input[type=password], textarea');
+  if (key === "v" && field) {
+    e.preventDefault();
+    return pasteInto(field, false);
+  }
+  if (key !== "c" && key !== "x") return;
+  const selected = field ? field.value.slice(field.selectionStart, field.selectionEnd) : String(window.getSelection());
+  if (!selected || field?.type === "password") return;
+  e.preventDefault();
+  await api().copy(selected);
+  if (key === "x" && field) insertText(field, "");
+});
+
+// ---------- Cập nhật app ----------
+$("upd-later").onclick = () => { state.dismissedUpdate = $("upd-ver").textContent.slice(1); $("update-bar").hidden = true; };
+$("upd-now").onclick = async () => {
+  const res = await api().update_app();
+  if (res.error === "need_token") return openTokenModal();
+  if (res.error) return toast(res.error, true);
+  $("upd-now").disabled = true;
+  $("upd-now").textContent = "Đang tải bản mới...";
+};
+
 // ---------- Khởi động ----------
 window.addEventListener("pywebviewready", async () => {
   const info = await api().init();
   $("repo").textContent = info.repo;
   $("repo-2").textContent = info.repo;
   $("data-dir").textContent = info.data_dir;
+  state.appVersion = info.app_version;
+  $("app-ver").textContent = "v" + info.app_version;
   fillForm(info.form);
   state.login = info.login;
   renderLogin();

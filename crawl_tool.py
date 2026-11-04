@@ -8,6 +8,7 @@ tải về máy ngay sau khi crawl vì link ảnh của CDN (nhất là Douyin) 
 """
 import base64
 import ctypes
+import hashlib
 import html
 import io
 import json
@@ -28,6 +29,8 @@ from ctypes import wintypes
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
+APP_VERSION = "1.1.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_RELEASE_PREFIX = "app-v"  # bản app đăng ở Releases của repo base, tag dạng app-v1.2.3
 BASE_REPO = "MrNMDien/MediaCrawler"
 BASE_BRANCH = "main"
 
@@ -129,6 +132,76 @@ def github_get(url: str, token: str) -> bytes:
     })
     with urllib.request.urlopen(req, timeout=120) as resp:
         return resp.read()
+
+
+def parse_version(text: str) -> tuple:
+    """"app-v1.2.3" / "1.2.3" -> (1, 2, 3); không đúng dạng thì ()."""
+    match = re.fullmatch(r"(?:app-)?v?(\d+)\.(\d+)\.(\d+)", str(text or "").strip())
+    return tuple(int(x) for x in match.groups()) if match else ()
+
+
+def latest_app_release(token: str) -> dict:
+    """Bản app mới nhất trên GitHub Releases (tag app-v*, có file CrawlTool.exe). Không có thì {}."""
+    releases = json.loads(github_get(f"https://api.github.com/repos/{BASE_REPO}/releases?per_page=30", token))
+    best = {}
+    for rel in releases if isinstance(releases, list) else []:
+        tag = str(rel.get("tag_name") or "")
+        version = parse_version(tag)
+        if rel.get("draft") or rel.get("prerelease") or not tag.startswith(APP_RELEASE_PREFIX) or not version:
+            continue
+        asset = next((a for a in rel.get("assets") or [] if a.get("name") == f"{APP_NAME}.exe"), None)
+        if asset and version > best.get("version_tuple", ()):
+            body = str(rel.get("body") or "")
+            sha = re.search(r"sha256:\s*([0-9a-fA-F]{64})", body)
+            notes = re.sub(r"sha256:\s*[0-9a-fA-F]{64}", "", body).strip()
+            best = {"version_tuple": version, "version": ".".join(map(str, version)), "notes": notes[:500],
+                    "asset_url": asset["url"], "size": asset.get("size", 0), "sha256": sha.group(1).lower() if sha else ""}
+    return best
+
+
+def github_download_asset(url: str, token: str) -> bytes:
+    """Tải file đính kèm release. GitHub chuyển hướng sang máy chủ lưu file, chỗ đó phải gọi KHÔNG kèm
+    token (gửi kèm sẽ bị từ chối, và cũng không nên đưa token cho máy chủ khác)."""
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/octet-stream", "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28", "User-Agent": APP_NAME,
+    })
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(req, timeout=60) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code not in (301, 302, 303, 307, 308):
+            raise
+        location = e.headers.get("Location", "")
+    if not location.startswith("https://"):
+        raise RuntimeError("GitHub trả về địa chỉ tải không hợp lệ")
+    with urllib.request.urlopen(urllib.request.Request(location, headers={"User-Agent": APP_NAME}), timeout=600) as resp:
+        return resp.read()
+
+
+def apply_app_update(data: bytes, exe: Path, sha256: str) -> None:
+    """Thay file exe đang chạy bằng bản mới. Windows cho đổi tên (không cho xóa) file exe đang chạy,
+    nên: exe -> .old.exe, bản mới -> exe. Lần mở sau app tự xóa .old.exe."""
+    if len(data) < 1_000_000 or not data.startswith(b"MZ"):
+        raise ValueError("File cập nhật không phải chương trình Windows hợp lệ")
+    if not sha256 or hashlib.sha256(data).hexdigest() != sha256.lower():
+        raise ValueError("File cập nhật không khớp checksum, đã hủy để an toàn")
+    new, old = exe.with_name(f"{exe.stem}.new.exe"), exe.with_name(f"{exe.stem}.old.exe")
+    new.write_bytes(data)
+    old.unlink(missing_ok=True)
+    exe.rename(old)
+    try:
+        new.rename(exe)
+    except OSError:
+        old.rename(exe)  # trả lại bản cũ nếu không thay được
+        raise
+
+
+def remove_old_exe(exe: Path) -> None:
+    try:
+        exe.with_name(f"{exe.stem}.old.exe").unlink(missing_ok=True)
+    except OSError:
+        pass  # bản cũ còn đang thoát, lần sau xóa
 
 
 def latest_sha(token: str) -> str:
@@ -859,6 +932,8 @@ class Api:
         self._sig = None
         self._sig_checked = 0.0
         self._follow_lock = threading.Lock()
+        self._app_update = {}  # bản app mới hơn trên GitHub (nếu có)
+        self._app_checked = 0.0
         self._window = None
 
     # --- tiện ích nội bộ ---
@@ -933,7 +1008,37 @@ class Api:
             self._write("[LỖI] Không giải mã được token đã lưu, hãy nhập lại trong tab Cài đặt.")
             return ""
 
+    def _check_app_update(self, token: str) -> None:
+        self._app_checked = time.time()
+        try:
+            latest = latest_app_release(token)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            self._write(f"[CẢNH BÁO] Không kiểm tra được bản app mới: {e}")
+            return
+        if latest and latest["version_tuple"] > parse_version(APP_VERSION):
+            if self._app_update.get("version") != latest["version"]:
+                self._write(f"Có bản CrawlTool mới v{latest['version']} (đang dùng v{APP_VERSION}).")
+            self._app_update = latest
+        else:
+            self._app_update = {}
+
+    def _app_update_worker(self, token: str) -> None:
+        info = self._app_update
+        try:
+            exe = Path(sys.executable)
+            self._write(f"Đang tải CrawlTool v{info['version']}...")
+            data = github_download_asset(info["asset_url"], token)
+            apply_app_update(data, exe, info["sha256"])
+            self._write("Đã cài bản mới, đang khởi động lại...")
+            subprocess.Popen([str(exe)], cwd=str(exe.parent))
+            if self._window:
+                self._window.destroy()
+        except Exception as e:  # noqa: BLE001
+            self._write(f"[LỖI] Cập nhật app thất bại: {e}")
+            self._state = "idle"
+
     def _update_worker(self, token: str) -> None:
+        self._check_app_update(token)
         try:
             self._write("Đang kiểm tra bản mới của base code...")
             for message in migrate_browser_data():
@@ -1066,6 +1171,10 @@ class Api:
         """Chạy nền khi app mở: đến giờ thì tự kiểm tra kênh theo dõi (app đang bận thì đợi)."""
         while True:
             time.sleep(60)
+            if time.time() - self._app_checked > 6 * 3600:  # app mở lâu: 6 giờ hỏi bản app mới 1 lần
+                token = self._token()
+                if token:
+                    self._check_app_update(token)
             settings = self._follow_settings()
             due = time.time() - settings["last_check"] >= settings["hours"] * 3600
             if settings["auto"] and due and self._state == "idle" and load_follows(self._data_dir()):
@@ -1265,6 +1374,7 @@ class Api:
         return {
             "form": form, "data_dir": self._data_dir(), "has_token": bool(self._settings.get("token")),
             "warnings": warnings, "repo": BASE_REPO, "login": self.get_login(), "gemini": self.get_gemini(),
+            "app_version": APP_VERSION, "can_self_update": bool(getattr(sys, "frozen", False)),
             "ai_topic": clean_topic(self._settings.get("ai_topic")),
         }
 
@@ -1392,6 +1502,7 @@ class Api:
             "lines": lines, "next": next_index, "state": self._state,
             "running": [n for n in self._procs if n in PLATFORM_NAMES.values()],
             "base": self._settings.get("base_sha", "")[:7], "lib_rev": self._lib_rev,
+            "app_update": {k: self._app_update[k] for k in ("version", "notes")} if self._app_update else None,
         }
 
     def set_token(self, token) -> dict:
@@ -1491,6 +1602,21 @@ class Api:
         if isinstance(url, str) and url.startswith(("https://", "http://")):
             os.startfile(url)
 
+    def update_app(self) -> dict:
+        """Nút "Cập nhật & khởi động lại": tải bản app mới, thay exe, mở lại."""
+        if not self._app_update:
+            return {"error": "Đang dùng bản mới nhất"}
+        if not getattr(sys, "frozen", False):
+            return {"error": "Chỉ tự cập nhật được khi chạy từ file CrawlTool.exe"}
+        if self._state != "idle":
+            return {"error": "App đang bận, đợi chạy xong rồi cập nhật."}
+        token = self._token()
+        if not token:
+            return {"error": "need_token"}
+        self._state = "app_updating"
+        threading.Thread(target=self._app_update_worker, args=(token,), daemon=True).start()
+        return {"ok": True}
+
     def copy(self, text) -> None:
         set_clipboard(str(text))
 
@@ -1540,6 +1666,8 @@ def ui_html() -> str:
 def main() -> None:
     if self_install_if_needed():
         return
+    if getattr(sys, "frozen", False):
+        remove_old_exe(Path(sys.executable))
     import webview
 
     api = Api()

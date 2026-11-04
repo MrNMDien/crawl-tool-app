@@ -440,6 +440,48 @@ def test_search_channels():
             ct.BASE_DIR, ct.uv_path, ct.fetch_image, ct.save_settings = old
 
 
+def test_app_self_update():
+    assert ct.parse_version("app-v1.2.10") == (1, 2, 10) and ct.parse_version("v2") == ()
+    exe_bytes = b"MZ" + b"\0" * 1_200_000
+    sha = __import__("hashlib").sha256(exe_bytes).hexdigest()
+    releases = [
+        {"tag_name": "app-v1.3.0", "draft": True, "assets": [{"name": "CrawlTool.exe", "url": "u-draft"}]},  # nháp: bỏ
+        {"tag_name": "app-v1.2.0", "body": f"Sửa dán\n\nsha256: {sha}", "assets": [{"name": "CrawlTool.exe", "url": "u-120", "size": 9}]},
+        {"tag_name": "app-v1.10.0", "body": "không có file exe", "assets": []},  # thiếu file: bỏ
+        {"tag_name": "v9.9.9", "assets": [{"name": "CrawlTool.exe", "url": "u-khac"}]},  # không phải tag app: bỏ
+        {"tag_name": "app-v1.1.5", "assets": [{"name": "CrawlTool.exe", "url": "u-115"}]},
+    ]
+    old_get = ct.github_get
+    ct.github_get = lambda url, token: json.dumps(releases).encode()
+    try:
+        latest = ct.latest_app_release("t")
+    finally:
+        ct.github_get = old_get
+    assert latest["version"] == "1.2.0" and latest["asset_url"] == "u-120" and latest["sha256"] == sha
+    assert latest["notes"] == "Sửa dán"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = Path(tmp) / "CrawlTool.exe"
+        exe.write_bytes(b"MZ old")
+        for bad, bad_sha in ((b"not an exe" * 200_000, sha), (exe_bytes, "0" * 64), (exe_bytes, "")):
+            try:
+                ct.apply_app_update(bad, exe, bad_sha)
+            except ValueError:
+                continue
+            raise AssertionError("file sai phải bị từ chối")
+        assert exe.read_bytes() == b"MZ old"  # từ chối thì không đụng bản đang dùng
+        ct.apply_app_update(exe_bytes, exe, sha)
+        assert exe.read_bytes() == exe_bytes and (Path(tmp) / "CrawlTool.old.exe").read_bytes() == b"MZ old"
+        ct.remove_old_exe(exe)
+        assert not (Path(tmp) / "CrawlTool.old.exe").exists()
+
+    api = ct.Api()
+    assert api.update_app()["error"] == "Đang dùng bản mới nhất"
+    api._app_update = latest
+    assert "CrawlTool.exe" in api.update_app()["error"]  # chạy từ mã nguồn thì không tự cập nhật
+    assert api.poll()["app_update"] == {"version": "1.2.0", "notes": "Sửa dán"}
+
+
 def test_old_form_migrates():
     api = ct.Api()
     api._settings = {"form": {"platform": "dy", "crawl_type": "search"}}
@@ -571,6 +613,7 @@ if __name__ == "__main__":
     test_follow_check_end_to_end()
     test_login_button_flow()
     test_search_channels()
+    test_app_self_update()
     test_old_form_migrates()
     test_parse()
     test_normalize_and_library()

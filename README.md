@@ -47,6 +47,17 @@ git merge upstream/main
 git push origin main
 ```
 
+## Phát hành bản app mới (app đã cài tự cập nhật)
+
+1. Tăng `APP_VERSION` trong `crawl_tool.py` (ví dụ `1.1.0` → `1.2.0`).
+2. Chạy:
+
+```bash
+powershell -ExecutionPolicy Bypass -File release.ps1 -Notes "Mô tả thay đổi"
+```
+
+Script chạy test, build, tính sha256 rồi đăng `CrawlTool.exe` lên Releases của repo base (tag `app-v<phiên bản>`). App đã cài hỏi GitHub khi mở (và mỗi 6 giờ nếu đang mở), thấy bản mới thì hiện thanh **Có bản CrawlTool mới** → bấm **Cập nhật & khởi động lại**: tải về, kiểm tra sha256, thay exe, mở lại. Token chỉ đọc repo base là đủ.
+
 ## Build lại app
 
 Chỉ cần build lại khi sửa `crawl_tool.py` hoặc `ui.html`.

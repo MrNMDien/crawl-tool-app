@@ -29,7 +29,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.1.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.1.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # bản app đăng ở Releases của repo base, tag dạng app-v1.2.3
 BASE_REPO = "MrNMDien/MediaCrawler"
 BASE_BRANCH = "main"
@@ -658,7 +658,7 @@ def results_signature(data_dir: str) -> tuple:
 FOLLOW_PLATFORMS = {"dy"}
 FOLLOW_MAX_VIDEOS = 18  # đúng 1 trang danh sách video của kênh Douyin: đủ để thấy video mới
 FOLLOW_HOURS = (1, 3, 6, 12, 24)
-DEFAULT_FOLLOW_SETTINGS = {"auto": True, "hours": 6, "headless": False, "last_check": 0}
+DEFAULT_FOLLOW_SETTINGS = {"auto": True, "hours": 6, "last_check": 0}
 
 
 def follows_file(data_dir: str) -> Path:
@@ -1138,7 +1138,7 @@ class Api:
             values = {
                 "platform": "dy", "crawl_type": "creator", "targets": "\n".join(c["url"] for c in channels.values()),
                 "login": login["type"], "max_notes": FOLLOW_MAX_VIDEOS, "max_comments": 1, "comments": False,
-                "media": False, "headless": settings["headless"],
+                "media": False, "headless": False,  # Douyin chặn khi chạy ẩn
             }
             if login["type"] == "cookie":
                 values["cookies"] = self._cookies().get("dy", "")
@@ -1222,7 +1222,7 @@ class Api:
         try:
             login = self._login()
             values = {"platform": "dy", "crawl_type": "search", "targets": "search", "login": login["type"],
-                      "max_notes": 1, "max_comments": 1, "headless": self._follow_settings()["headless"]}
+                      "max_notes": 1, "max_comments": 1, "headless": False}  # Douyin chặn khi chạy ẩn
             if login["type"] == "cookie":
                 values["cookies"] = self._cookies().get("dy", "")
             output = []
@@ -1273,7 +1273,7 @@ class Api:
             write_follows(self._data_dir(), channels)
         return self.follows()
 
-    def set_follow_settings(self, auto=None, hours=None, headless=None) -> dict:
+    def set_follow_settings(self, auto=None, hours=None) -> dict:
         settings = self._follow_settings()
         if auto is not None:
             settings["auto"] = bool(auto)
@@ -1281,8 +1281,6 @@ class Api:
             if int(hours) not in FOLLOW_HOURS:
                 return {"error": "Chu kỳ kiểm tra không hợp lệ"}
             settings["hours"] = int(hours)
-        if headless is not None:
-            settings["headless"] = bool(headless)
         self._settings["follow"] = settings
         save_settings(self._settings)
         return self.follows()

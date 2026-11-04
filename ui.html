@@ -383,7 +383,7 @@
         <div>
           <label class="switch"><span class="text"><b>Tự kiểm tra khi app đang mở</b><span class="hint" id="fl-next">—</span></span><input type="checkbox" id="fl-auto"><span class="track"></span></label>
           <div class="row-inline" style="padding: 4px 0 10px"><span class="label">Mỗi</span><select id="fl-hours"></select><span class="label">giờ một lần</span></div>
-          <label class="switch"><span class="text"><b>Chạy ẩn trình duyệt khi kiểm tra</b><span class="hint">Không bật cửa sổ Chrome; cần đã đăng nhập Douyin trước</span></span><input type="checkbox" id="fl-headless"><span class="track"></span></label>
+          <span class="hint">Khi kiểm tra, cửa sổ Chrome sẽ hiện lên (Douyin chặn nếu chạy ẩn). Cứ để nó tự đóng.</span>
         </div>
         <div class="login-line">Thông báo: <b id="fl-tg">—</b> · <button class="link" id="fl-tg-settings" type="button">cài Telegram</button></div>
 
@@ -838,7 +838,6 @@ function renderFollows(f) {
 
   const st = f.settings;
   $("fl-auto").checked = st.auto;
-  $("fl-headless").checked = st.headless;
   const hours = $("fl-hours");
   if (!hours.options.length) for (const h of f.hours_options) hours.append(new Option(String(h), String(h)));
   hours.value = String(st.hours);
@@ -908,9 +907,8 @@ $("fl-check").onclick = async () => {
   $("logbox").classList.add("open");
   toast("Đang kiểm tra kênh theo dõi, xem tiến độ ở Nhật ký (tab Crawl)");
 };
-$("fl-auto").onchange = async () => renderFollows(await api().set_follow_settings($("fl-auto").checked, null, null));
-$("fl-hours").onchange = async () => renderFollows(await api().set_follow_settings(null, Number($("fl-hours").value), null));
-$("fl-headless").onchange = async () => renderFollows(await api().set_follow_settings(null, null, $("fl-headless").checked));
+$("fl-auto").onchange = async () => renderFollows(await api().set_follow_settings($("fl-auto").checked, null));
+$("fl-hours").onchange = async () => renderFollows(await api().set_follow_settings(null, Number($("fl-hours").value)));
 $("fl-tg-settings").onclick = () => { showTab("settings"); $("tg-card").scrollIntoView({ behavior: "smooth" }); };
 
 // ---------- Cài đặt: Telegram ----------

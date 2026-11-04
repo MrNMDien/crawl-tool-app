@@ -345,7 +345,7 @@ def test_follow_check_end_to_end():
             assert follow["channels"][0]["new"] == ["3"]
             assert sent and sent[0][0] == "sendMessage" and sent[0][1]["chat_id"] == "42" and "Tập 3" in sent[0][1]["text"]
             assert api.mark_seen()["channels"][0]["new"] == []
-            assert api.set_follow_settings(None, 5, None)["error"] and api.set_follow_settings(False, 12, True)["settings"]["hours"] == 12
+            assert api.set_follow_settings(None, 5)["error"] and api.set_follow_settings(False, 12)["settings"]["hours"] == 12
             assert api.unfollow(follow["channels"][0]["key"])["channels"] == []
         finally:
             ct.BASE_DIR, ct.uv_path, ct.save_settings, ct.telegram_call, ct.download_thumb = old

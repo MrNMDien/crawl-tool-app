@@ -313,6 +313,7 @@
         <div class="logbar" id="logbar">
           <svg viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></svg><b>Nhật ký</b>
           <span class="last" id="log-last"></span>
+          <button class="btn sm" id="btn-copy-log" title="Copy toàn bộ nhật ký phiên này để gửi đi phân tích"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>Copy log</button>
           <button class="btn sm" id="btn-clear-log">Xóa</button>
           <svg class="chev" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg>
         </div>
@@ -769,6 +770,11 @@ $("btn-stop").onclick = () => api().stop();
 // ---------- Nhật ký ----------
 $("logbar").onclick = (e) => { if (!e.target.closest("button")) $("logbox").classList.toggle("open"); };
 $("btn-clear-log").onclick = () => { $("log").replaceChildren(); $("log-last").textContent = ""; };
+$("btn-copy-log").onclick = async () => {
+  const res = await api().copy_log();
+  if (res.error) toast(res.error, true);
+  else toast(res.lines ? `Đã copy ${res.lines} dòng log` : "Nhật ký đang trống");
+};
 function logClass(line) {
   if (/\[LỖI\]|ERROR|Traceback|Error:/.test(line)) return "err";
   if (/\[CẢNH BÁO\]|WARNING/.test(line)) return "warn";

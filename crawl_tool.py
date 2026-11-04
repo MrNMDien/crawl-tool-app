@@ -510,6 +510,34 @@ def thumb_data_uri(path: Path) -> str:
     return f"data:{image_mime(data)};base64,{base64.b64encode(data).decode()}"
 
 
+def set_clipboard(text: str) -> None:
+    """Ghi chữ vào clipboard Windows (Unicode, không giới hạn độ dài như cách gọi PowerShell)."""
+    CF_UNICODETEXT, GMEM_MOVEABLE = 13, 0x0002
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = kernel32.GlobalUnlock.argtypes = kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    data = text.encode("utf-16-le") + b"\x00\x00"
+    for _ in range(20):  # clipboard có thể đang bị app khác giữ trong chốc lát
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        raise OSError("clipboard đang bị ứng dụng khác dùng")
+    try:
+        user32.EmptyClipboard()
+        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+        ctypes.memmove(kernel32.GlobalLock(handle), data, len(data))
+        kernel32.GlobalUnlock(handle)
+        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+            kernel32.GlobalFree(handle)  # Windows chỉ giữ handle khi SetClipboardData thành công
+            raise ctypes.WinError()
+    finally:
+        user32.CloseClipboard()
+
+
 # ---------- Tự cài đặt / gỡ cài đặt (khi chạy từ file .exe) ----------
 
 def ask_yes_no(text: str) -> bool:
@@ -907,10 +935,17 @@ class Api:
             os.startfile(url)
 
     def copy(self, text) -> None:
-        # Truyền qua biến môi trường để nội dung không bị PowerShell hiểu thành lệnh
-        env = dict(os.environ, CRAWLTOOL_CLIP=str(text))
-        subprocess.run(["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value $env:CRAWLTOOL_CLIP"],
-                       env=env, creationflags=NO_WINDOW)
+        set_clipboard(str(text))
+
+    def copy_log(self) -> dict:
+        """Copy toàn bộ nhật ký của phiên này (kể cả phần đã xóa khỏi màn hình) để gửi đi phân tích."""
+        with self._lock:
+            lines = list(self._lines)
+        try:
+            set_clipboard("\r\n".join(lines))  # CRLF: dán vào Notepad/Zalo/Messenger giữ đúng từng dòng
+        except OSError as e:
+            return {"error": f"Không copy được: {e}"}
+        return {"ok": True, "lines": len(lines)}
 
     def open_data_dir(self) -> None:
         Path(self._data_dir()).mkdir(parents=True, exist_ok=True)

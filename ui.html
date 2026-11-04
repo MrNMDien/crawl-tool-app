@@ -10,7 +10,8 @@
     --text: #15171c; --muted: #687080; --faint: #9aa1ad;
     --accent: #5a55f2; --accent-soft: #ecebfe; --accent-ink: #ffffff;
     --danger: #e5484d; --danger-soft: #fdecec; --ok: #23955f; --ok-soft: #e5f5ec; --warn: #b7791f; --warn-soft: #fdf3e1;
-    --console-bg: #101217; --console-text: #cfd3dc; --console-muted: #6f7686;
+    --star: #f5a524;
+    --console-bg: #101217; --console-text: #cfd3dc; --console-muted: #7a8191;
     --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 2px 8px rgba(16, 24, 40, .06);
     --radius: 12px;
   }
@@ -71,7 +72,7 @@
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 14px;
     border-radius: 9px; border: 1px solid var(--border); background: var(--panel); cursor: pointer; font-weight: 600;
-    white-space: nowrap; transition: background .12s, border-color .12s;
+    white-space: nowrap; transition: background .12s, border-color .12s, color .12s;
   }
   .btn:hover { background: var(--hover); }
   .btn:disabled { opacity: .45; cursor: default; }
@@ -81,9 +82,8 @@
   .btn.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; }
   .btn.sm { height: 30px; padding: 0 10px; font-size: 13px; border-radius: 8px; }
   .btn.lg { height: 42px; padding: 0 20px; font-size: 15px; }
-  .btn.ghost { border-color: transparent; background: none; }
-  .btn.ghost:hover { background: var(--hover); }
-  label.field { display: flex; flex-direction: column; gap: 6px; }
+  .btn.icon { width: 30px; padding: 0; }
+  label.field, div.field { display: flex; flex-direction: column; gap: 6px; }
   .label { font-size: 12.5px; font-weight: 600; color: var(--muted); }
   .hint { font-size: 12px; color: var(--faint); }
   input[type=text], input[type=password], input[type=number], textarea, select {
@@ -91,22 +91,22 @@
     padding: 8px 11px; outline: none; transition: border-color .12s, box-shadow .12s;
   }
   input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  textarea { resize: vertical; min-height: 92px; }
-  select { height: 36px; padding: 0 10px; cursor: pointer; }
+  textarea { resize: vertical; min-height: 84px; }
+  select { height: 34px; padding: 0 8px; cursor: pointer; }
   input[type=number] { height: 36px; }
 
-  /* Nhóm nút chọn (segmented) */
+  /* Nhóm nút chọn */
   .seg { display: flex; flex-wrap: wrap; gap: 6px; }
   .seg button {
-    border: 1px solid var(--border); background: var(--panel); border-radius: 9px; height: 34px; padding: 0 12px;
-    cursor: pointer; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--border); background: var(--panel); border-radius: 9px; height: 32px; padding: 0 11px;
+    cursor: pointer; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px;
   }
   .seg button:hover { color: var(--text); background: var(--hover); }
   .seg button.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
   .pdot { width: 8px; height: 8px; border-radius: 50%; }
 
   /* Công tắc */
-  .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; cursor: pointer; }
+  .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; cursor: pointer; }
   .switch + .switch { border-top: 1px solid var(--border); }
   .switch input { display: none; }
   .switch .track { width: 36px; height: 20px; border-radius: 99px; background: var(--border); position: relative; flex: none; transition: background .15s; }
@@ -119,45 +119,30 @@
   .switch .text { display: flex; flex-direction: column; }
   .switch .text b { font-weight: 600; }
 
-  /* ---------- Tab Crawl ---------- */
-  #view-crawl { gap: 16px; padding: 16px; }
-  .form-panel { width: 430px; flex: none; display: flex; flex-direction: column; overflow: hidden; }
-  .form-scroll { flex: 1; overflow-y: auto; padding: 18px 20px; display: flex; flex-direction: column; gap: 18px; }
-  .form-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+  /* ---------- Tab Crawl: form bên trái, kết quả bên phải ---------- */
+  #view-crawl, #view-library { gap: 16px; padding: 16px; }
+  .form-panel { width: 360px; flex: none; display: flex; flex-direction: column; overflow: hidden; }
+  .form-scroll { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+  .form-foot { padding: 12px 18px; border-top: 1px solid var(--border); display: flex; gap: 8px; }
   .form-foot .btn.primary { flex: 1; }
-  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .section-title { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin-bottom: -6px; }
   .note { font-size: 12.5px; padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--text); display: flex; gap: 9px; }
   .note svg { color: var(--accent); margin-top: 2px; }
 
-  .console { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--console-bg); border-color: transparent; }
-  .console-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,.06); color: var(--console-text); }
-  .console-head b { font-weight: 600; font-size: 13px; }
-  .console-head .btn { background: transparent; border-color: rgba(255,255,255,.12); color: var(--console-text); }
-  .console-head .btn:hover { background: rgba(255,255,255,.06); }
-  #log {
-    flex: 1; overflow-y: auto; margin: 0; padding: 12px 16px; color: var(--console-text);
-    font: 12.5px/1.6 "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-word;
-  }
-  #log .err { color: #ff8a8f; }
-  #log .warn { color: #f2c46d; }
-  #log .ok { color: #6fd8a0; }
-  #log .sep { color: var(--console-muted); }
-  #log .tag { font-weight: 700; }
+  .panel { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 
-  /* ---------- Tab Thư viện ---------- */
-  #view-library { flex-direction: column; min-width: 0; }
-  .toolbar {
-    display: flex; align-items: center; gap: 10px; padding: 12px 20px; flex-wrap: wrap; flex: none;
-    background: var(--panel); border-bottom: 1px solid var(--border);
-  }
-  .search { position: relative; width: 280px; }
-  .search svg { position: absolute; left: 11px; top: 10px; color: var(--faint); }
-  .search input { padding-left: 34px; height: 36px; }
-  .toolbar select { width: auto; min-width: 150px; }
-  .toolbar .total { color: var(--muted); font-size: 13px; }
-  .grid-wrap { flex: 1; overflow-y: auto; padding: 18px 20px 28px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
+  /* ---------- Lưới video (dùng chung cho Kết quả và Thư viện) ---------- */
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; flex-wrap: wrap; flex: none; border-bottom: 1px solid var(--border); }
+  .toolbar h2 { margin: 0 6px 0 0; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .toolbar h2 .live { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 99px; }
+  .search { position: relative; width: 210px; }
+  .search svg { position: absolute; left: 10px; top: 9px; color: var(--faint); }
+  .search input { padding-left: 32px; height: 34px; }
+  .toolbar select { width: auto; max-width: 170px; }
+  .toolbar .total { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .grid-wrap { flex: 1; overflow-y: auto; padding: 16px 16px 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 14px; }
   .vcard { display: flex; flex-direction: column; overflow: hidden; transition: transform .15s, box-shadow .15s; }
   .vcard:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(16,24,40,.12); }
   .thumb { position: relative; aspect-ratio: 3 / 4; background: var(--hover); cursor: pointer; overflow: hidden; }
@@ -165,32 +150,57 @@
   .thumb img.loaded { opacity: 1; }
   .thumb .ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); }
   .thumb .ph svg { width: 30px; height: 30px; stroke-width: 1.5; }
-  .badge {
-    position: absolute; top: 9px; left: 9px; font-size: 11px; font-weight: 700; color: #fff;
-    padding: 3px 8px; border-radius: 6px; letter-spacing: .02em;
+  .badge { position: absolute; top: 9px; left: 9px; font-size: 11px; font-weight: 700; color: #fff; padding: 3px 8px; border-radius: 6px; }
+  .saved-mark {
+    position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(0,0,0,.55); color: var(--star); backdrop-filter: blur(6px);
   }
+  .saved-mark svg { width: 14px; height: 14px; fill: currentColor; }
   .likes-chip {
     position: absolute; bottom: 9px; left: 9px; display: flex; align-items: center; gap: 5px;
     font-size: 12.5px; font-weight: 700; color: #fff; background: rgba(0,0,0,.55); padding: 3px 9px; border-radius: 99px;
     backdrop-filter: blur(6px);
   }
   .likes-chip svg { width: 13px; height: 13px; fill: currentColor; stroke: none; }
-  .vbody { padding: 11px 12px 12px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .vbody { padding: 10px 11px 11px; display: flex; flex-direction: column; gap: 7px; flex: 1; }
   .vtitle {
     font-weight: 600; font-size: 13.5px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2;
     -webkit-box-orient: vertical; overflow: hidden; min-height: 38px;
   }
   .vtitle.empty { color: var(--faint); font-weight: 500; }
-  .stats { display: flex; gap: 12px; color: var(--muted); font-size: 12.5px; flex-wrap: wrap; }
+  .stats { display: flex; gap: 11px; color: var(--muted); font-size: 12.5px; flex-wrap: wrap; }
   .stats span { display: inline-flex; align-items: center; gap: 4px; }
   .stats svg { width: 13px; height: 13px; }
   .meta { font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .vactions { display: flex; gap: 6px; margin-top: auto; }
-  .vactions .btn { flex: 1; }
-  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); padding: 80px 20px; text-align: center; }
+  .vactions .save { flex: 1; }
+  .save.on { color: var(--star); border-color: color-mix(in srgb, var(--star) 55%, var(--border)); background: color-mix(in srgb, var(--star) 12%, var(--panel)); }
+  .save.on svg { fill: currentColor; }
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); padding: 70px 20px; text-align: center; }
   .empty-state svg { width: 40px; height: 40px; stroke-width: 1.4; color: var(--faint); }
   .empty-state b { color: var(--text); font-size: 15px; }
-  .more { display: flex; justify-content: center; padding-top: 20px; }
+  .more { display: flex; justify-content: center; padding-top: 18px; }
+
+  /* ---------- Ngăn nhật ký phía dưới kết quả ---------- */
+  .logbox { flex: none; background: var(--console-bg); color: var(--console-text); }
+  .logbar { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 10px 0 14px; cursor: pointer; user-select: none; }
+  .logbar b { font-weight: 600; font-size: 13px; }
+  .logbar .last { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 12px Consolas, monospace; color: var(--console-muted); }
+  .logbar .last.err { color: #ff8a8f; }
+  .logbar .btn { background: transparent; border-color: rgba(255,255,255,.12); color: var(--console-text); }
+  .logbar .btn:hover { background: rgba(255,255,255,.06); }
+  .logbar .chev { transition: transform .15s; }
+  .logbox.open .chev { transform: rotate(180deg); }
+  #log {
+    display: none; height: 240px; overflow-y: auto; margin: 0; padding: 10px 16px; border-top: 1px solid rgba(255,255,255,.07);
+    font: 12.5px/1.6 "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-word;
+  }
+  .logbox.open #log { display: block; }
+  #log .err { color: #ff8a8f; }
+  #log .warn { color: #f2c46d; }
+  #log .ok { color: #6fd8a0; }
+  #log .sep { color: var(--console-muted); }
+  #log .tag { font-weight: 700; }
 
   /* ---------- Tab Cài đặt ---------- */
   #view-settings { overflow-y: auto; justify-content: center; padding: 24px; }
@@ -201,6 +211,23 @@
   .setting p { margin: 0; color: var(--muted); font-size: 13px; }
   .setting code { font: 12.5px Consolas, monospace; background: var(--hover); padding: 2px 6px; border-radius: 5px; word-break: break-all; }
   .setting .acts { display: flex; gap: 8px; flex: none; }
+  .setting.col { flex-direction: column; align-items: stretch; gap: 14px; }
+  .setting .head { display: flex; align-items: center; gap: 18px; }
+  .cookie-list { display: flex; flex-direction: column; gap: 8px; }
+  .cookie-row { display: grid; grid-template-columns: 130px 86px 1fr auto auto; gap: 8px; align-items: center; }
+  .cookie-row .name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .chip { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; text-align: center; background: var(--hover); color: var(--muted); }
+  .chip.ok { background: var(--ok-soft); color: var(--ok); }
+  .gem-row { display: grid; grid-template-columns: 1fr 220px auto; gap: 8px; }
+  .link { color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; background: none; border: 0; padding: 0; font: inherit; }
+  .login-line { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .login-line b { color: var(--text); font-weight: 600; }
+  .label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .btn.ai { height: 26px; padding: 0 9px; font-size: 12.5px; border-radius: 7px; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); background: var(--accent-soft); }
+  .kw-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 240px; overflow-y: auto; }
+  .kw-list button { border: 1px solid var(--border); background: var(--panel); border-radius: 99px; height: 30px; padding: 0 12px; cursor: pointer; font-weight: 600; color: var(--muted); }
+  .kw-list button.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .modal .row { display: grid; grid-template-columns: 1fr 90px; gap: 8px; }
   .setting.danger { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
 
   /* ---------- Hộp thoại & thông báo ---------- */
@@ -230,7 +257,7 @@
   <div class="brand"><span class="logo"><svg viewBox="0 0 24 24"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg></span>CrawlTool</div>
   <nav>
     <button data-tab="crawl" class="active"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>Crawl</button>
-    <button data-tab="library"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Thư viện video <span class="count" id="lib-count">0</span></button>
+    <button data-tab="library"><svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z"/></svg>Thư viện <span class="count" id="lib-count">0</span></button>
     <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>Cài đặt</button>
   </nav>
   <div class="spacer"></div>
@@ -239,7 +266,7 @@
 </header>
 
 <main>
-  <!-- ===== Tab Crawl ===== -->
+  <!-- ===== Tab Crawl: form + kết quả + nhật ký ===== -->
   <section class="view active" id="view-crawl">
     <div class="card form-panel">
       <div class="form-scroll">
@@ -247,18 +274,13 @@
         <div class="field"><span class="label">Nền tảng</span><div class="seg" id="seg-platform"></div>
           <span class="hint" id="platform-hint"></span></div>
         <div class="field"><span class="label">Kiểu crawl</span><div class="seg" id="seg-type"></div></div>
-        <label class="field">
-          <span class="label" id="targets-label">Từ khóa</span>
+        <div class="field">
+          <div class="label-row"><span class="label" id="targets-label">Từ khóa</span>
+            <button class="btn ai" id="btn-ai" type="button">✨ Gợi ý bằng Gemini</button></div>
           <textarea id="targets" spellcheck="false"></textarea>
           <span class="hint" id="targets-hint">Mỗi dòng một từ khóa.</span>
-        </label>
-
-        <div class="section-title">Đăng nhập</div>
-        <div class="seg" id="seg-login"></div>
-        <label class="field" id="cookie-field" hidden>
-          <span class="label">Cookie</span>
-          <input type="password" id="cookies" placeholder="Dán chuỗi cookie vào đây">
-        </label>
+        </div>
+        <div class="login-line">Đăng nhập: <b id="login-summary">—</b> · <button class="link" id="btn-login-settings" type="button">đổi trong Cài đặt</button></div>
 
         <div class="section-title">Tùy chọn</div>
         <div class="row2">
@@ -271,55 +293,53 @@
           <label class="switch"><span class="text"><b>Chạy ẩn trình duyệt</b><span class="hint">Chỉ bật khi đã đăng nhập từ trước</span></span><input type="checkbox" id="headless"><span class="track"></span></label>
         </div>
         <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          <span>App mở một cửa sổ Chrome riêng. Lần đầu, đăng nhập trong cửa sổ đó (quét QR, SMS hay mật khẩu đều được, chờ tối đa 10 phút).</span></div>
+          <span>App mở cửa sổ Chrome riêng cho mỗi nền tảng. Lần đầu, đăng nhập trong cửa sổ đó (QR, SMS hay mật khẩu đều được, chờ tối đa 10 phút); các lần sau app nhớ phiên đăng nhập.</span></div>
       </div>
       <div class="form-foot">
-        <button class="btn primary lg" id="btn-start"><svg viewBox="0 0 24 24"><path d="m6 4 14 8-14 8V4Z"/></svg>Bắt đầu crawl</button>
+        <button class="btn primary lg" id="btn-start"><svg viewBox="0 0 24 24"><path d="m6 4 14 8-14 8V4Z"/></svg><span>Bắt đầu crawl</span></button>
         <button class="btn lg danger" id="btn-stop" disabled><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>Dừng</button>
       </div>
     </div>
 
-    <div class="card console">
-      <div class="console-head">
-        <svg viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></svg><b>Nhật ký</b>
-        <div class="spacer"></div>
-        <button class="btn sm" id="btn-clear-log">Xóa màn hình</button>
+    <div class="card panel">
+      <div class="panel" id="results"></div>
+      <div class="logbox" id="logbox">
+        <div class="logbar" id="logbar">
+          <svg viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></svg><b>Nhật ký</b>
+          <span class="last" id="log-last"></span>
+          <button class="btn sm" id="btn-clear-log">Xóa</button>
+          <svg class="chev" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg>
+        </div>
+        <pre id="log"></pre>
       </div>
-      <pre id="log"></pre>
     </div>
   </section>
 
-  <!-- ===== Tab Thư viện ===== -->
+  <!-- ===== Tab Thư viện: video đã chọn ===== -->
   <section class="view" id="view-library">
-    <div class="toolbar">
-      <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="text" id="q" placeholder="Tìm theo tiêu đề, tác giả..."></div>
-      <select id="f-platform"></select>
-      <select id="f-keyword"></select>
-      <select id="f-sort">
-        <option value="likes">Nhiều like nhất</option>
-        <option value="views">Nhiều view nhất</option>
-        <option value="comments">Nhiều bình luận nhất</option>
-        <option value="shares">Nhiều chia sẻ nhất</option>
-        <option value="published">Mới đăng nhất</option>
-        <option value="crawled">Mới crawl nhất</option>
-      </select>
-      <span class="total" id="total"></span>
-      <div class="spacer"></div>
-      <button class="btn sm" id="btn-reload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>Làm mới</button>
-    </div>
-    <div class="grid-wrap" id="grid-wrap">
-      <div class="grid" id="grid"></div>
-      <div class="empty-state" id="empty" hidden>
-        <svg viewBox="0 0 24 24"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4V8Z"/></svg>
-        <b id="empty-title">Chưa có video nào</b><span id="empty-text">Sang tab Crawl, nhập từ khóa và bấm Bắt đầu.</span>
-      </div>
-      <div class="more" id="more" hidden><button class="btn" id="btn-more">Xem thêm</button></div>
-    </div>
+    <div class="card panel" id="library"></div>
   </section>
 
   <!-- ===== Tab Cài đặt ===== -->
   <section class="view" id="view-settings">
     <div class="settings">
+      <div class="card setting col" id="login-card">
+        <div class="head"><div class="info"><h3>Đăng nhập</h3>
+          <p>Cách app đăng nhập các nền tảng khi crawl.</p></div></div>
+        <div class="seg" id="seg-login"></div>
+        <p class="hint" id="login-hint"></p>
+        <div class="cookie-list" id="cookie-list"></div>
+      </div>
+      <div class="card setting col">
+        <div class="head"><div class="info"><h3>Gemini API <span class="chip" id="gem-status">chưa có key</span></h3>
+          <p>Dùng để gợi ý từ khóa tìm kiếm. Lấy key miễn phí ở <button class="link" id="btn-gem-link" type="button">Google AI Studio</button>. Key lưu mã hóa trên máy này.</p></div></div>
+        <div class="gem-row">
+          <input type="password" id="gem-key" placeholder="Dán API key (để trống nếu giữ key cũ)" autocomplete="off">
+          <input type="text" id="gem-model" placeholder="Model" spellcheck="false">
+          <button class="btn" id="btn-gem-save">Lưu</button>
+        </div>
+        <div><button class="link" id="btn-gem-clear" type="button">Xóa key</button></div>
+      </div>
       <div class="card setting">
         <div class="info"><h3>Thư mục kết quả</h3><p><code id="data-dir">—</code></p></div>
         <div class="acts"><button class="btn sm" id="btn-open-dir">Mở</button><button class="btn sm" id="btn-choose-dir">Đổi thư mục</button></div>
@@ -333,7 +353,7 @@
         <div class="acts"><button class="btn sm" id="btn-token">Đổi token</button></div>
       </div>
       <div class="card setting danger">
-        <div class="info"><h3>Gỡ cài đặt</h3><p>Xóa app, base code và token. Thư mục kết quả được giữ lại.</p></div>
+        <div class="info"><h3>Gỡ cài đặt</h3><p>Xóa app, base code và token. Thư mục kết quả (kể cả thư viện) được giữ lại.</p></div>
         <div class="acts"><button class="btn sm danger" id="btn-uninstall">Gỡ cài đặt</button></div>
       </div>
     </div>
@@ -353,6 +373,25 @@
     <input type="password" id="token-input" placeholder="github_pat_..." autocomplete="off">
     <div class="error" id="token-error"></div>
     <div class="acts"><button class="btn" id="token-cancel">Để sau</button><button class="btn primary" id="token-save">Lưu và tải base code</button></div>
+  </div>
+</div>
+
+<!-- Hộp thoại gợi ý từ khóa bằng Gemini -->
+<div class="overlay" id="ai-modal">
+  <div class="card modal" style="width: 560px">
+    <h2>✨ Gợi ý từ khóa bằng Gemini</h2>
+    <p>Mô tả loại video cần tìm (tiếng Việt cũng được). Gemini sẽ đưa ra từ khóa tiếng Trung mà người dùng các nền tảng hay tìm.</p>
+    <div class="row">
+      <input type="text" id="ai-topic" placeholder="Ví dụ: phim bộ AI cổ trang, nữ chính trọng sinh báo thù">
+      <input type="number" id="ai-count" min="3" max="30" value="12" title="Số từ khóa">
+    </div>
+    <div class="kw-list" id="ai-list"></div>
+    <div class="error" id="ai-error"></div>
+    <div class="acts">
+      <button class="btn" id="ai-close">Đóng</button>
+      <button class="btn" id="ai-run">Tạo từ khóa</button>
+      <button class="btn primary" id="ai-add" disabled>Thêm vào ô từ khóa</button>
+    </div>
   </div>
 </div>
 
@@ -382,10 +421,11 @@ const CRAWL_TYPES = {
   detail: { name: "Bài chỉ định", label: "Link hoặc ID bài/video", hint: "Mỗi dòng một link hoặc ID." },
   creator: { name: "Trang creator", label: "Link hoặc ID creator", hint: "Mỗi dòng một link hoặc ID trang cá nhân." },
 };
-const LOGINS = { qrcode: "Quét mã QR", phone: "Số điện thoại", cookie: "Cookie" };
+const LOGINS = { qrcode: "Đăng nhập trong cửa sổ Chrome", cookie: "Dùng cookie" };
 const PAGE = 120;
 
 const ICON = {
+  search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   heart: '<svg viewBox="0 0 24 24"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.4 3 4.5 6.8 4.5c2.1 0 3.6 1.2 5.2 3 1.6-1.8 3.1-3 5.2-3 3.8 0 5.9 3.9 4.4 7.3C19.5 16.4 12 21 12 21Z"/></svg>',
   play: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4V8Z"/></svg>',
   comment: '<svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12Z"/></svg>',
@@ -393,17 +433,27 @@ const ICON = {
   open: '<svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
   copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>',
   image: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>',
+  star: '<svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z"/></svg>',
+  reload: '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>',
+  video: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4V8Z"/></svg>',
 };
 const fmt = new Intl.NumberFormat("vi-VN", { notation: "compact", maximumFractionDigits: 1 });
 const fmtDate = (ts) => ts ? new Date(ts * 1000).toLocaleDateString("vi-VN") : "";
 
-const state = { form: {}, next: 0, busyState: "idle", libRev: -1, libLoadedRev: -2, items: [], shown: PAGE, repo: "" };
+const state = { form: {}, next: 0, busyState: "idle", libRev: -1, lastRun: 0 };
+const thumbCache = new Map();  // key -> data URI, để vẽ lại lưới không phải tải lại ảnh
 
 // ---------- Tiện ích ----------
 function el(tag, cls, text) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
   if (text !== undefined) node.textContent = text;  // luôn dùng textContent: dữ liệu crawl là nội dung bên ngoài
+  return node;
+}
+function iconEl(tag, cls, icon, text) {
+  const node = el(tag, cls);
+  node.innerHTML = ICON[icon];  // chỉ chèn icon cố định, không chèn dữ liệu crawl
+  if (text !== undefined) node.append(text);
   return node;
 }
 function toast(msg, isErr) {
@@ -428,9 +478,206 @@ function confirmBox(title, text) {
 function showTab(name) {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
-  if (name === "library" && state.libLoadedRev !== state.libRev) loadLibrary();
 }
 document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+
+// ---------- Lưới video dùng chung ----------
+// mode "results": kết quả crawl (có lọc lần crawl gần nhất); mode "library": video đã lưu vào thư viện.
+function createGallery(root, mode) {
+  const g = { items: [], shown: PAGE };
+  const isLib = mode === "library";
+
+  const bar = el("div", "toolbar");
+  const title = el("h2");
+  title.append(isLib ? "Thư viện" : "Kết quả");
+  const live = el("span", "live", "đang cập nhật");
+  live.hidden = true;
+  title.append(live);
+  const search = el("div", "search");
+  search.innerHTML = ICON.search;
+  const q = el("input");
+  q.type = "text";
+  q.placeholder = "Tìm tiêu đề, tác giả...";
+  search.append(q);
+  const scope = el("select");
+  scope.append(new Option("Lần crawl gần nhất", "last"), new Option("Tất cả đã crawl", "all"));
+  scope.hidden = isLib;
+  const fPlatform = el("select"), fKeyword = el("select"), fSort = el("select");
+  const sorts = [["likes", "Nhiều like nhất"], ["views", "Nhiều view nhất"], ["comments", "Nhiều bình luận nhất"],
+    ["shares", "Nhiều chia sẻ nhất"], ["published", "Mới đăng nhất"], ["crawled", "Mới crawl nhất"]];
+  if (isLib) sorts.unshift(["saved_at", "Mới lưu nhất"]);
+  for (const [v, t] of sorts) fSort.append(new Option(t, v));
+  const total = el("span", "total");
+  const reload = iconEl("button", "btn sm icon", "reload");
+  reload.title = "Làm mới";
+  reload.onclick = () => loadData();
+  bar.append(title, search, scope, fPlatform, fKeyword, fSort, total, el("div", "spacer"), reload);
+
+  const wrap = el("div", "grid-wrap");
+  const grid = el("div", "grid");
+  const empty = el("div", "empty-state");
+  empty.innerHTML = isLib ? ICON.star : ICON.video;
+  const emptyTitle = el("b"), emptyText = el("span");
+  empty.append(emptyTitle, emptyText);
+  const more = el("div", "more");
+  const moreBtn = el("button", "btn", "Xem thêm");
+  more.append(moreBtn);
+  wrap.append(grid, empty, more);
+  root.append(bar, wrap);
+
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      loadThumb(entry.target);
+    }
+  }, { root: wrap, rootMargin: "400px" });
+
+  function inScope(i) {
+    // chưa có lần crawl nào bằng bản này thì hiện tất cả
+    return isLib || scope.value === "all" || !state.lastRun || i.crawled >= state.lastRun - 5;
+  }
+  function fillSelect(select, allLabel, options) {
+    const keep = select.value;
+    select.replaceChildren(new Option(allLabel, ""));
+    for (const [value, label] of options) select.append(new Option(label, value));
+    select.value = options.some(([v]) => v === keep) ? keep : "";
+  }
+  function filtered() {
+    const text = q.value.trim().toLowerCase();
+    const sort = fSort.value;
+    return g.items
+      .filter((i) => inScope(i) && (!fPlatform.value || i.platform === fPlatform.value) && (!fKeyword.value || i.keyword === fKeyword.value)
+        && (!text || i.title.toLowerCase().includes(text) || i.author.toLowerCase().includes(text)))
+      .sort((a, b) => (b[sort] || 0) - (a[sort] || 0));
+  }
+  g.render = () => {
+    const scoped = g.items.filter(inScope);
+    fillSelect(fPlatform, "Mọi nền tảng", [...new Set(scoped.map((i) => i.platform))].map((p) => [p, PLATFORMS[p]?.name || p]));
+    fillSelect(fKeyword, "Mọi từ khóa", [...new Set(scoped.map((i) => i.keyword).filter(Boolean))].sort().map((k) => [k, k]));
+    const list = filtered();
+    observer.disconnect();
+    grid.replaceChildren(...list.slice(0, g.shown).map(card));
+    grid.querySelectorAll(".thumb").forEach((t) => (thumbCache.has(t.dataset.key) ? loadThumb(t) : observer.observe(t)));
+    total.textContent = list.length === scoped.length ? `${list.length} video` : `${list.length} / ${scoped.length} video`;
+    more.hidden = list.length <= g.shown;
+    empty.hidden = list.length > 0;
+    live.hidden = isLib || state.busyState !== "crawling";
+    if (scoped.length) {
+      emptyTitle.textContent = "Không có video khớp bộ lọc";
+      emptyText.textContent = "Thử bỏ bớt bộ lọc hoặc đổi từ khóa tìm.";
+    } else if (isLib) {
+      emptyTitle.textContent = "Thư viện trống";
+      emptyText.textContent = "Ở tab Crawl, bấm ☆ Lưu ở video bạn ưng để thêm vào đây.";
+    } else if (state.busyState === "crawling") {
+      emptyTitle.textContent = "Đang crawl...";
+      emptyText.textContent = "Video sẽ hiện ở đây ngay khi lấy được.";
+    } else {
+      emptyTitle.textContent = "Chưa có kết quả";
+      emptyText.textContent = g.items.length
+        ? "Lần crawl gần nhất chưa có video. Chọn “Tất cả đã crawl” để xem kết quả cũ."
+        : "Nhập từ khóa ở bên trái và bấm Bắt đầu crawl.";
+    }
+  };
+  g.setItems = (items) => { g.items = items; g.render(); };
+  g.markSaved = (key, saved) => {
+    for (const btn of grid.querySelectorAll(`.save[data-key="${CSS.escape(key)}"]`)) setSaveButton(btn, saved);
+    for (const mark of grid.querySelectorAll(`.saved-mark[data-key="${CSS.escape(key)}"]`)) mark.hidden = !saved;
+  };
+  q.oninput = () => { clearTimeout(g.timer); g.timer = setTimeout(() => { g.shown = PAGE; g.render(); }, 150); };
+  for (const s of [scope, fPlatform, fKeyword, fSort]) s.onchange = () => { g.shown = PAGE; g.render(); };
+  moreBtn.onclick = () => { g.shown += PAGE; g.render(); };
+  return g;
+}
+
+function loadThumb(thumb) {
+  const key = thumb.dataset.key;
+  const apply = (uri) => {
+    if (!uri) return;
+    const img = thumb.querySelector("img");
+    img.onload = () => { img.classList.add("loaded"); thumb.querySelector(".ph")?.remove(); };
+    img.src = uri;
+  };
+  if (thumbCache.has(key)) return apply(thumbCache.get(key));
+  api().thumb(key).then((uri) => { if (uri) thumbCache.set(key, uri); apply(uri); });
+}
+
+function setSaveButton(btn, saved) {
+  btn.classList.toggle("on", saved);
+  btn.lastChild.textContent = saved ? "Đã lưu" : "Lưu";
+  btn.title = saved ? "Bỏ khỏi thư viện" : "Thêm vào thư viện";
+}
+
+function card(item) {
+  const c = el("article", "card vcard");
+  const thumb = el("div", "thumb");
+  thumb.dataset.key = item.key;
+  thumb.title = "Mở bài trên trình duyệt";
+  const p = PLATFORMS[item.platform] || { name: item.platform, color: "#666" };
+  const badge = el("span", "badge", p.name);
+  badge.style.background = p.color;
+  const mark = iconEl("span", "saved-mark", "star");
+  mark.dataset.key = item.key;
+  mark.title = "Đã có trong thư viện";
+  mark.hidden = !item.saved;
+  thumb.append(el("img"), iconEl("div", "ph", "image"), badge, mark, iconEl("span", "likes-chip", "heart", fmt.format(item.likes)));
+  thumb.onclick = () => item.url && api().open_url(item.url);
+
+  const body = el("div", "vbody");
+  body.append(el("div", "vtitle" + (item.title ? "" : " empty"), item.title || "(không có tiêu đề)"));
+  const stats = el("div", "stats");
+  for (const [key, icon, label] of [["views", "play", "view"], ["comments", "comment", "bình luận"], ["shares", "share", "chia sẻ"]]) {
+    if (!item[key]) continue;
+    const s = iconEl("span", "", icon, fmt.format(item[key]));
+    s.title = item[key].toLocaleString("vi-VN") + " " + label;
+    stats.append(s);
+  }
+  if (stats.childElementCount) body.append(stats);
+  const meta = [item.author, fmtDate(item.published), item.keyword && "#" + item.keyword].filter(Boolean).join(" · ");
+  body.append(el("div", "meta", meta));
+
+  const acts = el("div", "vactions");
+  const save = iconEl("button", "btn sm save", "star", "");
+  save.dataset.key = item.key;
+  setSaveButton(save, !!item.saved);
+  save.onclick = () => toggleSave(item.key);
+  const open = iconEl("button", "btn sm icon", "open");
+  open.title = "Mở bài";
+  open.disabled = !item.url;
+  open.onclick = () => api().open_url(item.url);
+  const copy = iconEl("button", "btn sm icon", "copy");
+  copy.title = "Copy link";
+  copy.disabled = !item.url;
+  copy.onclick = async () => { await api().copy(item.url); toast("Đã copy link"); };
+  acts.append(save, open, copy);
+  body.append(acts);
+  c.append(thumb, body);
+  return c;
+}
+
+const results = createGallery($("results"), "results");
+const library = createGallery($("library"), "library");
+
+async function loadData() {
+  const data = await api().library();
+  state.lastRun = data.last_run;
+  results.setItems(data.items);
+  library.setItems(data.saved);
+  $("lib-count").textContent = data.saved.length;
+}
+async function toggleSave(key) {
+  const saved = library.items.some((i) => i.key === key);
+  const res = saved ? await api().remove_video(key) : await api().save_video(key);
+  if (res.error) return toast(res.error, true);
+  const source = results.items.find((i) => i.key === key) || library.items.find((i) => i.key === key);
+  for (const i of results.items) if (i.key === key) i.saved = !saved;
+  if (saved) library.items = library.items.filter((i) => i.key !== key);
+  else library.items.push({ ...source, saved: true, saved_at: res.saved_at });
+  results.markSaved(key, !saved);
+  library.render();
+  $("lib-count").textContent = library.items.length;
+  toast(saved ? "Đã bỏ khỏi thư viện" : "Đã thêm vào thư viện");
+}
 
 // ---------- Form crawl ----------
 function buildSeg(id, options, key, render, onPick) {
@@ -455,9 +702,7 @@ function pickPlatform(value) {
 function syncForm() {
   if (!multiPlatform() && state.form.platforms.length > 1) state.form.platforms = state.form.platforms.slice(0, 1);
   $("seg-platform").querySelectorAll("button").forEach((b) => b.classList.toggle("on", state.form.platforms.includes(b.dataset.value)));
-  for (const [id, key] of [["seg-type", "crawl_type"], ["seg-login", "login"]]) {
-    $(id).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.value === state.form[key]));
-  }
+  $("seg-type").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.value === state.form.crawl_type));
   const n = state.form.platforms.length;
   $("platform-hint").textContent = !multiPlatform()
     ? "Kiểu này chỉ chọn được một nền tảng."
@@ -466,7 +711,7 @@ function syncForm() {
   const t = CRAWL_TYPES[state.form.crawl_type] || CRAWL_TYPES.search;
   $("targets-label").textContent = t.label;
   $("targets-hint").textContent = t.hint;
-  $("cookie-field").hidden = state.form.login !== "cookie";
+  $("btn-ai").hidden = !multiPlatform();
 }
 function fillForm(form) {
   state.form = { ...form };
@@ -480,7 +725,6 @@ function readForm() {
   return {
     ...state.form,
     targets: $("targets").value,
-    cookies: $("cookies").value,
     max_notes: $("max_notes").value,
     max_comments: $("max_comments").value,
     comments: $("comments").checked,
@@ -494,27 +738,33 @@ buildSeg("seg-platform", PLATFORMS, "platforms", (b, p) => {
   b.append(dot, p.name);
 }, pickPlatform);
 buildSeg("seg-type", CRAWL_TYPES, "crawl_type", (b, t) => (b.textContent = t.name));
-buildSeg("seg-login", LOGINS, "login", (b, name) => (b.textContent = name));
 
 $("btn-start").onclick = async () => {
   const res = await api().start(readForm());
-  if (res.error) toast(res.error, true);
+  if (res.error) return toast(res.error, true);
+  $("logbox").classList.add("open");
+  state.lastRun = Math.floor(Date.now() / 1000);
+  results.render();  // chuyển sang "lần crawl gần nhất" đang trống, chờ video mới
 };
 $("btn-stop").onclick = () => api().stop();
-$("btn-clear-log").onclick = () => $("log").replaceChildren();
 
-// ---------- Nhật ký & trạng thái ----------
+// ---------- Nhật ký ----------
+$("logbar").onclick = (e) => { if (!e.target.closest("button")) $("logbox").classList.toggle("open"); };
+$("btn-clear-log").onclick = () => { $("log").replaceChildren(); $("log-last").textContent = ""; };
+function logClass(line) {
+  if (/\[LỖI\]|ERROR|Traceback|Error:/.test(line)) return "err";
+  if (/\[CẢNH BÁO\]|WARNING/.test(line)) return "warn";
+  if (/Hoàn tất\.$|^Đã cập nhật|đã là bản mới nhất|^Đã tải/.test(line)) return "ok";
+  if (/^─+$/.test(line)) return "sep";
+  return "";
+}
 function appendLog(lines) {
+  if (!lines.length) return;
   const log = $("log");
   const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
   const frag = document.createDocumentFragment();
   for (const line of lines) {
-    let cls = "";
-    if (/\[LỖI\]|ERROR|Traceback|Error:/.test(line)) cls = "err";
-    else if (/\[CẢNH BÁO\]|WARNING/.test(line)) cls = "warn";
-    else if (/Hoàn tất\.$|^Đã cập nhật|đã là bản mới nhất|^Đã tải/.test(line)) cls = "ok";
-    else if (/^─+$/.test(line)) cls = "sep";
-    const row = el("span", cls);
+    const row = el("span", logClass(line));
     const tag = line.match(/^(?:\[LỖI\] )?\[([A-Za-z]+)\] /);
     const platform = tag && Object.values(PLATFORMS).find((p) => p.name === tag[1]);
     if (platform) {
@@ -527,9 +777,15 @@ function appendLog(lines) {
   log.append(frag);
   while (log.childElementCount > 4000) log.firstElementChild.remove();
   if (stick) log.scrollTop = log.scrollHeight;
+  const last = [...lines].reverse().find((l) => !/^─+$/.test(l)) || "";
+  $("log-last").textContent = last;
+  $("log-last").className = "last" + (logClass(last) === "err" ? " err" : "");
 }
+
+// ---------- Trạng thái ----------
 const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", crawling: "Đang crawl" };
 function applyState(s) {
+  const wasCrawling = state.busyState === "crawling";
   state.busyState = s.state;
   $("status").classList.toggle("busy", s.state !== "idle");
   $("status-text").textContent = s.state === "crawling" && s.running.length
@@ -541,129 +797,128 @@ function applyState(s) {
   $("base-ver").textContent = s.base || "chưa cài";
   if (s.lib_rev !== state.libRev) {
     state.libRev = s.lib_rev;
-    if ($("view-library").classList.contains("active")) loadLibrary();
-    else refreshCount();
-  }
+    loadData();
+  } else if (wasCrawling !== (s.state === "crawling")) results.render();
 }
 async function pollLoop() {
   try {
     const s = await api().poll(state.next);
-    if (s.lines.length) appendLog(s.lines);
+    appendLog(s.lines);
     state.next = s.next;
     applyState(s);
   } catch (e) { /* cửa sổ đang đóng */ }
   setTimeout(pollLoop, 400);
 }
 
-// ---------- Thư viện video ----------
-async function refreshCount() {
-  state.items = await api().library();
-  $("lib-count").textContent = state.items.length;
-}
-async function loadLibrary() {
-  state.libLoadedRev = state.libRev;
-  state.items = await api().library();
-  $("lib-count").textContent = state.items.length;
-  fillSelect($("f-platform"), "Tất cả nền tảng", [...new Set(state.items.map((i) => i.platform))].map((p) => [p, PLATFORMS[p]?.name || p]));
-  fillSelect($("f-keyword"), "Tất cả từ khóa", [...new Set(state.items.map((i) => i.keyword).filter(Boolean))].sort().map((k) => [k, k]));
-  state.shown = PAGE;
-  renderGrid();
-}
-function fillSelect(select, allLabel, options) {
-  const keep = select.value;
-  select.replaceChildren(new Option(allLabel, ""));
-  for (const [value, label] of options) select.append(new Option(label, value));
-  select.value = options.some(([v]) => v === keep) ? keep : "";
-}
-function filtered() {
-  const q = $("q").value.trim().toLowerCase();
-  const platform = $("f-platform").value, keyword = $("f-keyword").value, sort = $("f-sort").value;
-  return state.items
-    .filter((i) => (!platform || i.platform === platform) && (!keyword || i.keyword === keyword)
-      && (!q || i.title.toLowerCase().includes(q) || i.author.toLowerCase().includes(q)))
-    .sort((a, b) => (b[sort] || 0) - (a[sort] || 0));
-}
-const thumbObserver = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (!entry.isIntersecting) continue;
-    thumbObserver.unobserve(entry.target);
-    const img = entry.target.querySelector("img");
-    api().thumb(entry.target.dataset.key).then((uri) => {
-      if (!uri) return;
-      img.onload = () => { img.classList.add("loaded"); entry.target.querySelector(".ph")?.remove(); };
-      img.src = uri;
-    });
+// ---------- Cài đặt: đăng nhập ----------
+state.login = { type: "qrcode", saved: [] };
+function renderLogin() {
+  const login = state.login;
+  $("seg-login").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.value === login.type));
+  $("login-summary").textContent = login.type === "cookie" ? "dùng cookie đã lưu" : "trong cửa sổ Chrome";
+  $("login-hint").textContent = login.type === "cookie"
+    ? "Dán cookie của từng nền tảng (lấy từ trình duyệt đã đăng nhập). Crawl nền tảng nào thì cần cookie của nền tảng đó."
+    : "Khi crawl, app mở cửa sổ Chrome riêng cho mỗi nền tảng. Lần đầu đăng nhập trong cửa sổ đó (QR, SMS hay mật khẩu đều được); các lần sau app tự nhớ.";
+  const list = $("cookie-list");
+  list.hidden = login.type !== "cookie";
+  list.replaceChildren();
+  for (const [code, p] of Object.entries(PLATFORMS)) {
+    const row = el("div", "cookie-row");
+    const name = el("span", "name");
+    const dot = el("span", "pdot");
+    dot.style.background = p.color;
+    name.append(dot, p.name);
+    const has = login.saved.includes(code);
+    const chip = el("span", "chip" + (has ? " ok" : ""), has ? "đã lưu" : "chưa có");
+    const input = el("input");
+    input.type = "password";
+    input.placeholder = has ? "Dán cookie mới để thay" : "Dán cookie...";
+    const save = el("button", "btn sm", "Lưu");
+    save.onclick = async () => {
+      if (!input.value.trim()) return toast("Chưa dán cookie", true);
+      state.login = await api().set_cookie(code, input.value);
+      renderLogin();
+      toast("Đã lưu cookie " + p.name);
+    };
+    const del = el("button", "btn sm danger", "Xóa");
+    del.disabled = !has;
+    del.onclick = async () => { state.login = await api().set_cookie(code, ""); renderLogin(); toast("Đã xóa cookie " + p.name); };
+    row.append(name, chip, input, save, del);
+    list.append(row);
   }
-}, { root: $("grid-wrap"), rootMargin: "400px" });
-
-function card(item) {
-  const c = el("article", "card vcard");
-  const thumb = el("div", "thumb");
-  thumb.dataset.key = item.key;
-  thumb.title = "Mở bài trên trình duyệt";
-  const ph = el("div", "ph");
-  ph.innerHTML = ICON.image;  // icon cố định, không chứa dữ liệu crawl
-  const p = PLATFORMS[item.platform] || { name: item.platform, color: "#666" };
-  const badge = el("span", "badge", p.name);
-  badge.style.background = p.color;
-  const likes = el("span", "likes-chip");
-  likes.innerHTML = ICON.heart;
-  likes.append(fmt.format(item.likes));
-  thumb.append(el("img"), ph, badge, likes);
-  thumb.onclick = () => item.url && api().open_url(item.url);
-
-  const body = el("div", "vbody");
-  body.append(el("div", "vtitle" + (item.title ? "" : " empty"), item.title || "(không có tiêu đề)"));
-  const stats = el("div", "stats");
-  for (const [key, icon, label] of [["views", "play", "view"], ["comments", "comment", "bình luận"], ["shares", "share", "chia sẻ"]]) {
-    if (!item[key]) continue;
-    const s = el("span");
-    s.title = item[key].toLocaleString("vi-VN") + " " + label;
-    s.innerHTML = ICON[icon];
-    s.append(fmt.format(item[key]));
-    stats.append(s);
-  }
-  if (stats.childElementCount) body.append(stats);
-  const meta = [item.author, fmtDate(item.published), item.keyword && "#" + item.keyword].filter(Boolean).join(" · ");
-  body.append(el("div", "meta", meta));
-
-  const acts = el("div", "vactions");
-  const open = el("button", "btn sm");
-  open.innerHTML = ICON.open;
-  open.append("Mở bài");
-  open.disabled = !item.url;
-  open.onclick = () => api().open_url(item.url);
-  const copy = el("button", "btn sm");
-  copy.innerHTML = ICON.copy;
-  copy.append("Copy link");
-  copy.disabled = !item.url;
-  copy.onclick = async () => { await api().copy(item.url); toast("Đã copy link"); };
-  acts.append(open, copy);
-  body.append(acts);
-  c.append(thumb, body);
-  return c;
 }
-function renderGrid() {
-  const list = filtered();
-  const grid = $("grid");
-  grid.replaceChildren();
-  thumbObserver.disconnect();
-  for (const item of list.slice(0, state.shown)) {
-    const c = card(item);
-    grid.append(c);
-    thumbObserver.observe(c.querySelector(".thumb"));
-  }
-  $("total").textContent = list.length === state.items.length ? `${list.length} video` : `${list.length} / ${state.items.length} video`;
-  $("more").hidden = list.length <= state.shown;
-  $("empty").hidden = list.length > 0;
-  $("empty-title").textContent = state.items.length ? "Không có video khớp bộ lọc" : "Chưa có video nào";
-  $("empty-text").textContent = state.items.length ? "Thử bỏ bớt bộ lọc hoặc đổi từ khóa tìm." : "Sang tab Crawl, nhập từ khóa và bấm Bắt đầu.";
+buildSeg("seg-login", LOGINS, "login", (b, name) => (b.textContent = name), async (value) => {
+  const res = await api().set_login_type(value);
+  if (res.error) return toast(res.error, true);
+  state.login = res;
+  renderLogin();
+});
+$("btn-login-settings").onclick = () => { showTab("settings"); $("login-card").scrollIntoView({ behavior: "smooth" }); };
+
+// ---------- Cài đặt: Gemini ----------
+function renderGemini(g) {
+  state.gemini = g;
+  $("gem-status").textContent = g.has_key ? "đã có key" : "chưa có key";
+  $("gem-status").className = "chip" + (g.has_key ? " ok" : "");
+  $("gem-model").value = g.model;
+  $("btn-gem-clear").hidden = !g.has_key;
 }
-let searchTimer;
-$("q").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.shown = PAGE; renderGrid(); }, 150); };
-for (const id of ["f-platform", "f-keyword", "f-sort"]) $(id).onchange = () => { state.shown = PAGE; renderGrid(); };
-$("btn-more").onclick = () => { state.shown += PAGE; renderGrid(); };
-$("btn-reload").onclick = loadLibrary;
+$("btn-gem-link").onclick = () => api().open_url("https://aistudio.google.com/apikey");
+$("btn-gem-save").onclick = async () => {
+  const res = await api().set_gemini($("gem-key").value, $("gem-model").value, false);
+  if (res.error) return toast(res.error, true);
+  $("gem-key").value = "";
+  renderGemini(res);
+  toast("Đã lưu cài đặt Gemini");
+};
+$("btn-gem-clear").onclick = async () => { renderGemini(await api().set_gemini(null, null, true)); toast("Đã xóa key Gemini"); };
+
+// ---------- Gợi ý từ khóa ----------
+function openAiModal() {
+  $("ai-error").textContent = "";
+  $("ai-modal").classList.add("open");
+  setTimeout(() => $("ai-topic").focus(), 50);
+}
+$("btn-ai").onclick = () => {
+  if (!state.gemini?.has_key) {
+    toast("Cần nhập Gemini API key trong Cài đặt trước", true);
+    showTab("settings");
+    return;
+  }
+  openAiModal();
+};
+$("ai-close").onclick = () => $("ai-modal").classList.remove("open");
+$("ai-topic").onkeydown = (e) => e.key === "Enter" && $("ai-run").click();
+$("ai-run").onclick = async () => {
+  const btn = $("ai-run");
+  btn.disabled = true;
+  btn.textContent = "Đang tạo...";
+  $("ai-error").textContent = "";
+  try {
+    const res = await api().suggest_keywords($("ai-topic").value, $("ai-count").value, state.form.platforms);
+    if (res.error === "need_key") { $("ai-error").textContent = "Chưa có Gemini API key: vào Cài đặt để nhập."; return; }
+    if (res.error) { $("ai-error").textContent = res.error; return; }
+    const list = $("ai-list");
+    list.replaceChildren(...res.keywords.map((kw) => {
+      const b = el("button", "on", kw);  // mặc định chọn hết, bấm để bỏ
+      b.type = "button";
+      b.onclick = () => { b.classList.toggle("on"); $("ai-add").disabled = !list.querySelector(".on"); };
+      return b;
+    }));
+    $("ai-add").disabled = !res.keywords.length;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Tạo lại";
+  }
+};
+$("ai-add").onclick = () => {
+  const picked = [...$("ai-list").querySelectorAll(".on")].map((b) => b.textContent);
+  const current = $("targets").value.split(/[\n,]/).map((t) => t.trim()).filter(Boolean);
+  const merged = [...new Set([...current, ...picked])];
+  $("targets").value = merged.join("\n");
+  $("ai-modal").classList.remove("open");
+  toast(`Đã thêm ${merged.length - current.length} từ khóa`);
+};
 
 // ---------- Cài đặt ----------
 function openTokenModal() {
@@ -693,17 +948,19 @@ $("btn-choose-dir").onclick = async () => {
   if (dir) { $("data-dir").textContent = dir; toast("Đã đổi thư mục kết quả"); }
 };
 $("btn-uninstall").onclick = async () => {
-  if (await confirmBox("Gỡ CrawlTool?", "Xóa app, base code và token đã lưu. Thư mục kết quả được giữ lại.")) api().uninstall_app();
+  if (await confirmBox("Gỡ CrawlTool?", "Xóa app, base code và token đã lưu. Thư mục kết quả và thư viện được giữ lại.")) api().uninstall_app();
 };
 
 // ---------- Khởi động ----------
 window.addEventListener("pywebviewready", async () => {
   const info = await api().init();
-  state.repo = info.repo;
   $("repo").textContent = info.repo;
   $("repo-2").textContent = info.repo;
   $("data-dir").textContent = info.data_dir;
   fillForm(info.form);
+  state.login = info.login;
+  renderLogin();
+  renderGemini(info.gemini);
   appendLog(info.warnings.map((w) => "[CẢNH BÁO] " + w));
   if (info.has_token) api().check_update();
   else openTokenModal();

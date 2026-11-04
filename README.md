@@ -2,9 +2,10 @@
 
 App Windows để chạy MediaCrawler mà không cần gõ lệnh. Giao diện viết bằng HTML (`ui.html`) nhưng hiển thị trong cửa sổ riêng của app qua pywebview/WebView2: không mở trình duyệt, không mở cổng mạng.
 
-- **Crawl**: chọn nền tảng, từ khóa/link, cách đăng nhập; xem nhật ký trực tiếp. Với kiểu Từ khóa có thể chọn **nhiều nền tảng cùng lúc**: mỗi nền tảng chạy song song trong một cửa sổ Chrome riêng (mở cách nhau 8 giây), nhật ký có tiền tố tên nền tảng, nút Dừng tắt tất cả.
-- **Thư viện video**: mọi video đã crawl hiện thành lưới ảnh bìa kèm like/view/bình luận/chia sẻ; tìm, lọc theo nền tảng/từ khóa, sắp xếp; mở bài hoặc copy link. Ảnh bìa được tải về máy ngay sau khi crawl (link ảnh của Douyin hết hạn sau vài ngày).
-- **Cài đặt**: thư mục kết quả, cập nhật base code, đổi token, gỡ cài đặt.
+- **Crawl**: form bên trái (nền tảng, từ khóa/link, tùy chọn), kết quả hiện ngay bên phải và cập nhật dần trong lúc crawl; nhật ký là ngăn thu gọn phía dưới. Với kiểu Từ khóa có thể chọn **nhiều nền tảng cùng lúc** (mỗi nền tảng một cửa sổ Chrome riêng, mở cách nhau 8 giây). Nút **✨ Gợi ý bằng Gemini** tạo từ khóa tiếng Trung từ mô tả chủ đề.
+- **Kết quả**: lưới ảnh bìa kèm like/view/bình luận/chia sẻ; lọc lần crawl gần nhất hoặc tất cả, theo nền tảng/từ khóa, tìm, sắp xếp; mở bài, copy link, **☆ Lưu** vào thư viện. Ảnh bìa tải về máy ngay sau khi crawl (link ảnh của Douyin hết hạn sau vài ngày).
+- **Thư viện**: chỉ những video đã lưu (`library.json` trong thư mục kết quả), vẫn giữ khi file kết quả bị xóa.
+- **Cài đặt**: cách đăng nhập (trong cửa sổ Chrome, hoặc cookie riêng từng nền tảng), Gemini API key + model, thư mục kết quả, cập nhật base code, đổi token, gỡ cài đặt. Token, cookie và API key đều lưu mã hóa bằng DPAPI.
 
 Kết quả lưu dạng jsonl (không xuất Excel).
 

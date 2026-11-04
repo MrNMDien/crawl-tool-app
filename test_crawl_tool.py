@@ -54,14 +54,87 @@ def test_build_jobs():
         {**BASE_FORM, "platforms": []},
         {**BASE_FORM, "platforms": ["dy", "nope"]},
         {**BASE_FORM, "platforms": ["dy", "xhs"], "crawl_type": "detail"},  # link/ID riêng từng nền tảng
-        {**BASE_FORM, "platforms": ["dy", "xhs"], "login": "cookie", "cookies": "a=1"},
+        {**BASE_FORM, "platforms": ["dy", "xhs"], "login": "cookie"},  # thiếu cookie của xhs
     ):
         try:
-            ct.build_jobs(bad, "x")
+            ct.build_jobs(bad, "x", cookies={"dy": "a=1"})
         except ValueError:
             continue
         raise AssertionError(f"phải báo lỗi: {bad}")
     assert list(ct.build_jobs({**BASE_FORM, "platforms": ["ks"], "crawl_type": "detail"}, "x")) == ["ks"]
+
+    # đăng nhập bằng cookie: mỗi nền tảng dùng cookie của riêng nó
+    jobs = ct.build_jobs({**BASE_FORM, "platforms": ["dy", "xhs"], "login": "cookie"}, "x", cookies={"dy": "a=1", "xhs": "b=2"})
+    assert jobs["dy"][jobs["dy"].index("--cookies") + 1] == "a=1"
+    assert jobs["xhs"][jobs["xhs"].index("--cookies") + 1] == "b=2"
+
+
+def test_login_settings():
+    old_save = ct.save_settings
+    ct.save_settings = lambda settings: None
+    try:
+        api = ct.Api()
+        api._settings = {"form": {"login": "cookie", "platforms": ["dy"]}}
+        api.init()  # cách đăng nhập cũ nằm trong form -> chuyển sang Cài đặt
+        assert api.get_login() == {"type": "cookie", "saved": []}
+        assert "login" not in api.init()["form"]
+        assert api.set_login_type("phone")["error"] and api.set_cookie("nope", "x")["error"]
+        assert api.set_cookie("dy", " sid=1; uid=2 ")["saved"] == ["dy"]
+        assert "sid=1" not in json.dumps(api._settings)  # cookie lưu mã hóa
+        assert api._cookies() == {"dy": "sid=1; uid=2"}
+        assert api.set_cookie("dy", "")["saved"] == []
+        assert api.set_login_type("qrcode")["type"] == "qrcode"
+
+        assert api.get_gemini() == {"has_key": False, "model": ct.GEMINI_DEFAULT_MODEL}
+        assert api.set_gemini("AIza-test", "gemini-2.5-flash")["has_key"] is True
+        assert "AIza-test" not in json.dumps(api._settings)
+        assert api.set_gemini(None, "../../evil")["error"]
+        assert api.set_gemini("", "")["model"] == ct.GEMINI_DEFAULT_MODEL and api.get_gemini()["has_key"]  # key trống: giữ key cũ
+        assert api.set_gemini(None, None, True)["has_key"] is False
+        assert api.suggest_keywords("phim AI")["error"] == "need_key"
+    finally:
+        ct.save_settings = old_save
+
+
+def test_gemini_keywords():
+    assert ct.clean_keywords(["AI短剧", " AI短剧 ", "AI, 漫剧", "a\nb", 5, "x" * 41, ""], 10) == ["AI短剧", "AI 漫剧", "a b"]
+    assert ct.clean_keywords("not a list", 5) == []
+    assert ct.clean_keywords([str(i) for i in range(50)], 3) == ["0", "1", "2"]
+
+    sent = {}
+
+    class FakeResp:
+        def __init__(self, payload):
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def fake_urlopen(req, timeout):
+        sent["url"], sent["key"] = req.full_url, req.get_header("X-goog-api-key")
+        sent["body"] = json.loads(req.data)
+        text = json.dumps(["AI短剧推荐", "AI漫剧", "AI漫剧"])
+        return FakeResp({"candidates": [{"content": {"parts": [{"text": text}]}}]})
+
+    old = ct.urllib.request.urlopen
+    ct.urllib.request.urlopen = fake_urlopen
+    try:
+        kws = ct.gemini_keywords("KEY", "gemini-flash-latest", "phim bộ AI cổ trang", 5, ["dy", "xhs"])
+        assert kws == ["AI短剧推荐", "AI漫剧"]
+        assert sent["url"].endswith("/models/gemini-flash-latest:generateContent") and sent["key"] == "KEY"
+        assert "phim bộ AI cổ trang" in sent["body"]["contents"][0]["parts"][0]["text"]
+        assert "Douyin, Xiaohongshu" in sent["body"]["contents"][0]["parts"][0]["text"]
+        try:
+            ct.gemini_keywords("KEY", "../x", "t", 5, [])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("model lạ phải bị chặn")
+    finally:
+        ct.urllib.request.urlopen = old
 
 
 def test_parallel_crawl():
@@ -102,6 +175,48 @@ def test_parallel_crawl():
             assert api._state == "idle" and "end bili" not in "\n".join(api._lines)
         finally:
             ct.BASE_DIR, ct.uv_path, ct.PARALLEL_STAGGER_SEC, ct.save_settings = old
+
+
+def test_saved_library_and_live_refresh():
+    with tempfile.TemporaryDirectory() as tmp:
+        jsonl = Path(tmp) / "douyin" / "jsonl" / "search_contents_2026-11-04.jsonl"
+        jsonl.parent.mkdir(parents=True)
+        row = {"aweme_id": "1", "title": "A", "aweme_url": "https://www.douyin.com/video/1", "liked_count": "10", "last_modify_ts": 1}
+        jsonl.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+        old_save = ct.save_settings
+        ct.save_settings = lambda settings: None
+        try:
+            api = ct.Api()
+            api._settings = {"data_dir": tmp, "last_run": 123}
+            data = api.library()
+            assert data["last_run"] == 123 and data["saved"] == [] and data["items"][0]["saved"] is False
+
+            assert api.save_video("dy_1")["ok"] and api.save_video("nope").get("error")
+            # crawl lại: số like mới phải hiện cả trong thư viện
+            jsonl.write_text(json.dumps({**row, "liked_count": "99", "last_modify_ts": 2}) + "\n", encoding="utf-8")
+            data = api.library()
+            assert data["items"][0]["saved"] is True
+            assert [(i["key"], i["likes"], i["saved"]) for i in data["saved"]] == [("dy_1", 99, True)]
+
+            # file kết quả bị xoá: video vẫn còn trong thư viện (dùng bản đã lưu)
+            jsonl.unlink()
+            data = api.library()
+            assert data["items"] == [] and data["saved"][0]["key"] == "dy_1"
+
+            assert api.remove_video("dy_1") == {"ok": True}
+            assert api.library()["saved"] == [] and ct.load_saved(tmp) == {}
+
+            # đang crawl: file kết quả đổi -> lib_rev tăng để giao diện tự tải lại
+            api._state = "crawling"
+            rev = api.poll()["lib_rev"]
+            jsonl.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            api._sig_checked = 0
+            assert api.poll()["lib_rev"] == rev + 1
+            api._sig_checked = 0
+            assert api.poll()["lib_rev"] == rev + 1  # không đổi gì thì không tải lại
+        finally:
+            ct.save_settings = old_save
 
 
 def test_old_form_migrates():
@@ -199,7 +314,10 @@ def test_extract_and_swap():
 if __name__ == "__main__":
     test_build_args()
     test_build_jobs()
+    test_login_settings()
+    test_gemini_keywords()
     test_parallel_crawl()
+    test_saved_library_and_live_refresh()
     test_old_form_migrates()
     test_parse()
     test_normalize_and_library()

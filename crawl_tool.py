@@ -17,7 +17,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -47,7 +49,7 @@ TARGET_FLAG = {"search": "--keywords", "detail": "--specified_id", "creator": "-
 LOGIN_TYPES = {"qrcode", "phone", "cookie"}
 FORM_CHOICES = {"crawl_type": set(TARGET_FLAG), "login": LOGIN_TYPES}
 DEFAULT_FORM = {
-    "platforms": ["xhs"], "crawl_type": "search", "targets": "AI短剧\nAI漫剧", "login": "qrcode",
+    "platforms": ["xhs"], "crawl_type": "search", "targets": "AI短剧\nAI漫剧",
     "max_notes": 20, "comments": False, "max_comments": 10, "media": False, "headless": False,
 }
 
@@ -68,6 +70,9 @@ THUMB_REFERER = {
     "ks": "https://www.kuaishou.com/", "bili": "https://www.bilibili.com/",
 }
 MAX_THUMB_BYTES = 5 * 1024 * 1024
+UI_LOGIN_TYPES = ("qrcode", "cookie")  # "qrcode" = đăng nhập trong cửa sổ Chrome (QR, SMS, mật khẩu đều được)
+GEMINI_DEFAULT_MODEL = "gemini-flash-latest"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 
@@ -172,17 +177,26 @@ def uv_env() -> dict:
     return env
 
 
-def build_jobs(values: dict, data_dir: str) -> dict:
-    """Mỗi nền tảng được chọn -> tham số dòng lệnh của một lần chạy main.py."""
+def build_jobs(values: dict, data_dir: str, cookies: dict = None) -> dict:
+    """Mỗi nền tảng được chọn -> tham số dòng lệnh của một lần chạy main.py.
+
+    cookies: cookie đã lưu của từng nền tảng (chỉ dùng khi đăng nhập bằng cookie).
+    """
     platforms = values.get("platforms")
     if not isinstance(platforms, list) or not platforms or not set(platforms) <= PLATFORM_CODES:
         raise ValueError("Chọn ít nhất một nền tảng")
     platforms = list(dict.fromkeys(platforms))  # bỏ trùng, giữ thứ tự
     if len(platforms) > 1 and values.get("crawl_type") != "search":
         raise ValueError("Chọn nhiều nền tảng chỉ dùng được với kiểu Từ khóa (link/ID là của riêng từng nền tảng)")
-    if len(platforms) > 1 and values.get("login") == "cookie":
-        raise ValueError("Cookie là của riêng một nền tảng: chọn một nền tảng hoặc đổi cách đăng nhập")
-    return {p: build_args({**values, "platform": p}, data_dir) for p in platforms}
+    jobs = {}
+    for p in platforms:
+        job = {**values, "platform": p}
+        if values.get("login") == "cookie":
+            job["cookies"] = (cookies or {}).get(p, "")
+            if not job["cookies"].strip():
+                raise ValueError(f"Chưa có cookie cho {PLATFORM_NAMES[p]}: vào Cài đặt → Đăng nhập để dán cookie")
+        jobs[p] = build_args(job, data_dir)
+    return jobs
 
 
 def build_args(values: dict, data_dir: str) -> list:
@@ -218,6 +232,62 @@ def build_args(values: dict, data_dir: str) -> list:
             raise ValueError("Đăng nhập bằng cookie nhưng chưa dán cookie")
         args += ["--cookies", cookies]
     return args
+
+
+def clean_keywords(raw, count: int) -> list:
+    """Lọc danh sách từ khóa Gemini trả về: chuỗi ngắn, không xuống dòng/dấu phẩy (dấu phẩy là ký tự tách từ khóa của base)."""
+    result = []
+    for kw in raw if isinstance(raw, list) else []:
+        if not isinstance(kw, str):
+            continue
+        kw = re.sub(r"[\s,，]+", " ", kw).strip()
+        if kw and len(kw) <= 40 and kw not in result:
+            result.append(kw)
+    return result[:count]
+
+
+def gemini_keywords(api_key: str, model: str, topic: str, count: int, platforms: list) -> list:
+    """Nhờ Gemini gợi ý từ khóa tìm kiếm tiếng Trung cho một chủ đề."""
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", model or ""):
+        raise ValueError("Tên model Gemini không hợp lệ")
+    names = ", ".join(PLATFORM_NAMES.get(p, p) for p in platforms) or "Douyin, Xiaohongshu, Bilibili, Kuaishou"
+    prompt = (
+        f"Bạn là chuyên gia tìm nội dung trên mạng xã hội Trung Quốc ({names}).\n"
+        f"Chủ đề người dùng cần tìm: {topic}\n\n"
+        f"Hãy đưa ra đúng {count} từ khóa tìm kiếm bằng tiếng Trung giản thể mà người dùng Trung Quốc thực sự gõ "
+        "trên các nền tảng này để tìm đúng loại video đó. Mỗi từ khóa ngắn (2-10 chữ), không trùng nghĩa nhau, "
+        "kết hợp từ khóa chung, từ khóa cụ thể theo thể loại/nội dung và cách gọi đang thịnh hành. "
+        "Không đánh số, không giải thích. Trả về mảng JSON các chuỗi."
+    )
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "temperature": 0.9,
+        },
+    }
+    req = urllib.request.Request(
+        GEMINI_URL.format(model=urllib.parse.quote(model)), data=json.dumps(body).encode("utf-8"), method="POST",
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read())
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return clean_keywords(json.loads(text), count)
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise ValueError("Gemini không trả về danh sách từ khóa, thử lại hoặc đổi cách mô tả chủ đề") from None
+
+
+def gemini_error(e: urllib.error.HTTPError) -> str:
+    try:
+        detail = json.loads(e.read())["error"]["message"]
+    except (ValueError, KeyError, TypeError, OSError):
+        detail = ""
+    hint = {400: "API key sai hoặc yêu cầu không hợp lệ", 403: "API key không có quyền dùng Gemini API",
+            404: "Không có model này, kiểm tra tên model trong Cài đặt", 429: "Hết hạn mức Gemini, thử lại sau"}
+    return f"Gemini báo lỗi {e.code}: {hint.get(e.code, 'lỗi không rõ')}" + (f" ({detail[:200]})" if detail else "")
 
 
 def redact_args(args: list) -> list:
@@ -352,6 +422,41 @@ def download_thumb(item: dict, data_dir: str):
     return path
 
 
+ITEM_FIELDS = ("key", "platform", "title", "url", "cover", "likes", "views", "comments", "shares",
+               "published", "crawled", "keyword", "author")
+
+
+def library_file(data_dir: str) -> Path:
+    """Thư viện = những video người dùng chọn giữ lại, lưu cạnh kết quả crawl."""
+    return Path(data_dir) / "library.json"
+
+
+def load_saved(data_dir: str) -> dict:
+    try:
+        data = json.loads(library_file(data_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) else {}
+
+
+def write_saved(data_dir: str, saved: dict) -> None:
+    path = library_file(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(saved, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def results_signature(data_dir: str) -> tuple:
+    """Kích thước + giờ sửa của các file kết quả: đổi tức là có video mới."""
+    sig = []
+    for dirname in DATA_DIRS:
+        for path in (Path(data_dir) / dirname / "jsonl").glob("*_contents_*.jsonl"):
+            st = path.stat()
+            sig.append((str(path), st.st_size, st.st_mtime_ns))
+    return tuple(sorted(sig))
+
+
 def thumb_data_uri(path: Path) -> str:
     # ponytail: gửi nguyên ảnh gốc sang giao diện; nếu thư viện lên vài nghìn video thì thu nhỏ ảnh khi tải về
     data = path.read_bytes()
@@ -424,6 +529,8 @@ class Api:
         self._lock = threading.Lock()
         self._library = {}
         self._lib_rev = 0
+        self._sig = None
+        self._sig_checked = 0.0
         self._window = None
 
     # --- tiện ích nội bộ ---
@@ -528,6 +635,9 @@ class Api:
     # --- gọi từ giao diện ---
     def init(self) -> dict:
         saved = dict(self._settings.get("form", {}))
+        old_login = saved.pop("login", None)
+        if "login" not in self._settings and old_login in UI_LOGIN_TYPES:
+            self._settings["login"] = {"type": old_login}
         if "platform" in saved and "platforms" not in saved:  # form của bản trước chỉ có 1 nền tảng
             saved["platforms"] = [saved.pop("platform")]
         platforms = saved.get("platforms")
@@ -545,10 +655,97 @@ class Api:
             warnings.append("Không thấy Node.js. Douyin và Zhihu cần Node.js để tính chữ ký: https://nodejs.org")
         return {
             "form": form, "data_dir": self._data_dir(), "has_token": bool(self._settings.get("token")),
-            "warnings": warnings, "repo": BASE_REPO,
+            "warnings": warnings, "repo": BASE_REPO, "login": self.get_login(), "gemini": self.get_gemini(),
         }
 
+    # --- đăng nhập (trong Cài đặt) ---
+    def _login(self) -> dict:
+        login = self._settings.get("login")
+        login = login if isinstance(login, dict) else {}
+        login_type = login.get("type") if login.get("type") in UI_LOGIN_TYPES else "qrcode"
+        cookies = login.get("cookies") if isinstance(login.get("cookies"), dict) else {}
+        return {"type": login_type, "cookies": {p: c for p, c in cookies.items() if p in PLATFORM_CODES}}
+
+    def _cookies(self) -> dict:
+        result = {}
+        for platform, blob in self._login()["cookies"].items():
+            try:
+                result[platform] = decrypt_token(blob)
+            except (OSError, ValueError):
+                self._write(f"[LỖI] Không giải mã được cookie {PLATFORM_NAMES[platform]}, hãy dán lại trong Cài đặt.")
+        return result
+
+    def get_login(self) -> dict:
+        login = self._login()
+        return {"type": login["type"], "saved": sorted(login["cookies"])}
+
+    def set_login_type(self, login_type) -> dict:
+        if login_type not in UI_LOGIN_TYPES:
+            return {"error": "Cách đăng nhập không hợp lệ"}
+        self._settings["login"] = {**self._login(), "type": login_type}
+        save_settings(self._settings)
+        return self.get_login()
+
+    def set_cookie(self, platform, cookie) -> dict:
+        if platform not in PLATFORM_CODES:
+            return {"error": "Nền tảng không hợp lệ"}
+        login = self._login()
+        cookie = str(cookie or "").strip()
+        if cookie:
+            login["cookies"][platform] = encrypt_token(cookie)
+        else:
+            login["cookies"].pop(platform, None)
+        self._settings["login"] = login
+        save_settings(self._settings)
+        return self.get_login()
+
+    # --- Gemini (trong Cài đặt) ---
+    def get_gemini(self) -> dict:
+        gemini = self._settings.get("gemini") if isinstance(self._settings.get("gemini"), dict) else {}
+        return {"has_key": bool(gemini.get("key")), "model": gemini.get("model") or GEMINI_DEFAULT_MODEL}
+
+    def set_gemini(self, key=None, model=None, clear=False) -> dict:
+        gemini = dict(self._settings.get("gemini") or {})
+        if clear:
+            gemini.pop("key", None)
+        elif key and str(key).strip():
+            gemini["key"] = encrypt_token(str(key).strip())
+        if model is not None:
+            model = str(model).strip() or GEMINI_DEFAULT_MODEL
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", model):
+                return {"error": "Tên model không hợp lệ"}
+            gemini["model"] = model
+        self._settings["gemini"] = gemini
+        save_settings(self._settings)
+        return self.get_gemini()
+
+    def suggest_keywords(self, topic, count=10, platforms=None) -> dict:
+        topic = str(topic or "").strip()[:500]
+        if not topic:
+            return {"error": "Nhập chủ đề cần tìm"}
+        gemini = self._settings.get("gemini") or {}
+        if not gemini.get("key"):
+            return {"error": "need_key"}
+        try:
+            api_key = decrypt_token(gemini["key"])
+            count = min(max(int(count), 3), 30)
+            platforms = [p for p in (platforms or []) if p in PLATFORM_CODES]
+            return {"keywords": gemini_keywords(api_key, self.get_gemini()["model"], topic, count, platforms)}
+        except urllib.error.HTTPError as e:
+            return {"error": gemini_error(e)}
+        except (urllib.error.URLError, OSError) as e:
+            return {"error": f"Không kết nối được Gemini: {e}"}
+        except ValueError as e:
+            return {"error": str(e)}
+
     def poll(self, since=0) -> dict:
+        # Đang crawl: cứ vài giây xem file kết quả có thêm video chưa để giao diện hiện dần
+        if self._state == "crawling" and time.monotonic() - self._sig_checked > 3:
+            self._sig_checked = time.monotonic()
+            sig = results_signature(self._data_dir())
+            if sig != self._sig:
+                self._sig = sig
+                self._lib_rev += 1
         with self._lock:
             start = max(int(since) - self._dropped, 0)
             lines = self._lines[start:]
@@ -583,10 +780,13 @@ class Api:
         if not BASE_DIR.exists():
             return {"error": "Chưa có base code. Vào tab Cài đặt → Kiểm tra cập nhật."}
         try:
-            jobs = build_jobs(values or {}, self._data_dir())
+            login = self._login()
+            values = {**(values or {}), "login": login["type"]}
+            jobs = build_jobs(values, self._data_dir(), self._cookies() if login["type"] == "cookie" else None)
         except ValueError as e:
             return {"error": str(e)}
         self._settings["form"] = {k: v for k, v in values.items() if k in DEFAULT_FORM}
+        self._settings["last_run"] = int(time.time())  # mốc để lọc "lần crawl gần nhất"
         save_settings(self._settings)
         Path(self._data_dir()).mkdir(parents=True, exist_ok=True)
         self._jobs, self._stop_event, self._state = jobs, threading.Event(), "crawling"
@@ -610,11 +810,37 @@ class Api:
             self._write("Đã dừng.")
         return {"ok": True}
 
-    def library(self) -> list:
+    def library(self) -> dict:
         data_dir = self._data_dir()
         items = load_library(data_dir)
-        self._library = {i["key"]: i for i in items}
-        return items
+        saved = load_saved(data_dir)
+        crawled = {i["key"]: i for i in items}
+        # Video đã lưu: lấy số liệu mới nhất nếu vẫn còn trong kết quả crawl, không thì dùng bản đã lưu
+        saved_items = [{**v, **crawled.get(k, {}), "key": k, "saved_at": v.get("saved_at", 0)} for k, v in saved.items()]
+        for item in items:
+            item["saved"] = item["key"] in saved
+        for item in saved_items:
+            item["saved"] = True
+        self._library = {**{i["key"]: i for i in saved_items}, **crawled}
+        return {"items": items, "saved": saved_items, "last_run": self._settings.get("last_run", 0)}
+
+    def save_video(self, key) -> dict:
+        item = self._library.get(key)
+        if not item:
+            return {"error": "Không tìm thấy video, hãy làm mới danh sách"}
+        data_dir = self._data_dir()
+        saved = load_saved(data_dir)
+        saved[key] = {**{f: item.get(f) for f in ITEM_FIELDS}, "saved_at": int(time.time())}
+        write_saved(data_dir, saved)
+        threading.Thread(target=download_thumb, args=(item, data_dir), daemon=True).start()
+        return {"ok": True, "saved_at": saved[key]["saved_at"]}
+
+    def remove_video(self, key) -> dict:
+        data_dir = self._data_dir()
+        saved = load_saved(data_dir)
+        if saved.pop(key, None) is not None:
+            write_saved(data_dir, saved)
+        return {"ok": True}
 
     def thumb(self, key) -> str:
         item = self._library.get(key)

@@ -143,6 +143,7 @@
   #log .warn { color: #f2c46d; }
   #log .ok { color: #6fd8a0; }
   #log .sep { color: var(--console-muted); }
+  #log .tag { font-weight: 700; }
 
   /* ---------- Tab Thư viện ---------- */
   #view-library { flex-direction: column; min-width: 0; }
@@ -243,7 +244,8 @@
     <div class="card form-panel">
       <div class="form-scroll">
         <div class="section-title">Nguồn</div>
-        <div class="field"><span class="label">Nền tảng</span><div class="seg" id="seg-platform"></div></div>
+        <div class="field"><span class="label">Nền tảng</span><div class="seg" id="seg-platform"></div>
+          <span class="hint" id="platform-hint"></span></div>
         <div class="field"><span class="label">Kiểu crawl</span><div class="seg" id="seg-type"></div></div>
         <label class="field">
           <span class="label" id="targets-label">Từ khóa</span>
@@ -431,7 +433,7 @@ function showTab(name) {
 document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 
 // ---------- Form crawl ----------
-function buildSeg(id, options, key, render) {
+function buildSeg(id, options, key, render, onPick) {
   const box = $(id);
   box.replaceChildren();
   for (const [value, opt] of Object.entries(options)) {
@@ -439,14 +441,28 @@ function buildSeg(id, options, key, render) {
     b.type = "button";
     b.dataset.value = value;
     render(b, opt);
-    b.onclick = () => { state.form[key] = value; syncForm(); };
+    b.onclick = () => { (onPick || ((v) => (state.form[key] = v)))(value); syncForm(); };
     box.append(b);
   }
 }
+const multiPlatform = () => state.form.crawl_type === "search";
+function pickPlatform(value) {
+  const list = state.form.platforms || [];
+  if (!multiPlatform()) state.form.platforms = [value];
+  else if (!list.includes(value)) state.form.platforms = [...list, value];
+  else if (list.length > 1) state.form.platforms = list.filter((p) => p !== value);  // luôn giữ ít nhất 1
+}
 function syncForm() {
-  for (const [id, key] of [["seg-platform", "platform"], ["seg-type", "crawl_type"], ["seg-login", "login"]]) {
+  if (!multiPlatform() && state.form.platforms.length > 1) state.form.platforms = state.form.platforms.slice(0, 1);
+  $("seg-platform").querySelectorAll("button").forEach((b) => b.classList.toggle("on", state.form.platforms.includes(b.dataset.value)));
+  for (const [id, key] of [["seg-type", "crawl_type"], ["seg-login", "login"]]) {
     $(id).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.value === state.form[key]));
   }
+  const n = state.form.platforms.length;
+  $("platform-hint").textContent = !multiPlatform()
+    ? "Kiểu này chỉ chọn được một nền tảng."
+    : n > 1 ? `Sẽ crawl ${n} nền tảng cùng lúc, mỗi nền tảng một cửa sổ Chrome riêng.` : "Bấm thêm nền tảng để crawl nhiều nền tảng cùng lúc.";
+  $("btn-start").lastChild.textContent = n > 1 && multiPlatform() ? `Bắt đầu crawl (${n} nền tảng)` : "Bắt đầu crawl";
   const t = CRAWL_TYPES[state.form.crawl_type] || CRAWL_TYPES.search;
   $("targets-label").textContent = t.label;
   $("targets-hint").textContent = t.hint;
@@ -472,11 +488,11 @@ function readForm() {
     headless: $("headless").checked,
   };
 }
-buildSeg("seg-platform", PLATFORMS, "platform", (b, p) => {
+buildSeg("seg-platform", PLATFORMS, "platforms", (b, p) => {
   const dot = el("span", "pdot");
   dot.style.background = p.color;
   b.append(dot, p.name);
-});
+}, pickPlatform);
 buildSeg("seg-type", CRAWL_TYPES, "crawl_type", (b, t) => (b.textContent = t.name));
 buildSeg("seg-login", LOGINS, "login", (b, name) => (b.textContent = name));
 
@@ -496,9 +512,17 @@ function appendLog(lines) {
     let cls = "";
     if (/\[LỖI\]|ERROR|Traceback|Error:/.test(line)) cls = "err";
     else if (/\[CẢNH BÁO\]|WARNING/.test(line)) cls = "warn";
-    else if (/^Hoàn tất|^Đã cập nhật|đã là bản mới nhất|^Đã tải/.test(line)) cls = "ok";
+    else if (/Hoàn tất\.$|^Đã cập nhật|đã là bản mới nhất|^Đã tải/.test(line)) cls = "ok";
     else if (/^─+$/.test(line)) cls = "sep";
-    frag.append(el("span", cls, line + "\n"));
+    const row = el("span", cls);
+    const tag = line.match(/^(?:\[LỖI\] )?\[([A-Za-z]+)\] /);
+    const platform = tag && Object.values(PLATFORMS).find((p) => p.name === tag[1]);
+    if (platform) {
+      const t = el("span", "tag", tag[0]);
+      t.style.color = platform.color;
+      row.append(t, line.slice(tag[0].length) + "\n");
+    } else row.textContent = line + "\n";
+    frag.append(row);
   }
   log.append(frag);
   while (log.childElementCount > 4000) log.firstElementChild.remove();
@@ -508,7 +532,8 @@ const STATUS = { idle: "Sẵn sàng", updating: "Đang cập nhật base code", 
 function applyState(s) {
   state.busyState = s.state;
   $("status").classList.toggle("busy", s.state !== "idle");
-  $("status-text").textContent = STATUS[s.state] || s.state;
+  $("status-text").textContent = s.state === "crawling" && s.running.length
+    ? "Đang crawl: " + s.running.join(", ") : STATUS[s.state] || s.state;
   $("btn-start").disabled = s.state !== "idle";
   $("btn-stop").disabled = s.state !== "crawling";
   $("btn-update").disabled = s.state !== "idle";

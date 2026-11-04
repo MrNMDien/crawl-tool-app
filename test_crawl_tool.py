@@ -1,7 +1,9 @@
 """Kiểm tra phần logic không cần giao diện. Chạy: python test_crawl_tool.py"""
 import io
 import json
+import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -41,6 +43,73 @@ def test_build_args():
         except ValueError:
             continue
         raise AssertionError(f"phải báo lỗi: {bad}")
+
+
+def test_build_jobs():
+    multi = {**BASE_FORM, "platforms": ["dy", "xhs", "dy"]}
+    jobs = ct.build_jobs(multi, "x")
+    assert list(jobs) == ["dy", "xhs"]  # bỏ trùng, giữ thứ tự
+    assert jobs["xhs"][jobs["xhs"].index("--platform") + 1] == "xhs"
+    for bad in (
+        {**BASE_FORM, "platforms": []},
+        {**BASE_FORM, "platforms": ["dy", "nope"]},
+        {**BASE_FORM, "platforms": ["dy", "xhs"], "crawl_type": "detail"},  # link/ID riêng từng nền tảng
+        {**BASE_FORM, "platforms": ["dy", "xhs"], "login": "cookie", "cookies": "a=1"},
+    ):
+        try:
+            ct.build_jobs(bad, "x")
+        except ValueError:
+            continue
+        raise AssertionError(f"phải báo lỗi: {bad}")
+    assert list(ct.build_jobs({**BASE_FORM, "platforms": ["ks"], "crawl_type": "detail"}, "x")) == ["ks"]
+
+
+def test_parallel_crawl():
+    """Chạy song song bằng một crawler giả: tên file 'run' được python chạy thay cho 'uv run'."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        (base / "run").write_text("\n".join([
+            "import sys, time",
+            "p = sys.argv[sys.argv.index('--platform') + 1]",
+            "print('start', p, flush=True)",
+            "time.sleep(30 if p == 'bili' else 1.5)",
+            "print('end', p, flush=True)",
+        ]), encoding="utf-8")
+        old = ct.BASE_DIR, ct.uv_path, ct.PARALLEL_STAGGER_SEC, ct.save_settings
+        ct.BASE_DIR, ct.uv_path, ct.PARALLEL_STAGGER_SEC = base, lambda: sys.executable, 0
+        ct.save_settings = lambda settings: None  # không ghi đè settings.json thật
+        try:
+            api = ct.Api()
+            api._settings = {"data_dir": str(base / "out")}
+            began = time.time()
+            assert api.start({**BASE_FORM, "platforms": ["dy", "xhs"]}) == {"ok": True}
+            assert api.start({**BASE_FORM, "platforms": ["dy"]})["error"]  # đang bận
+            while api._state != "idle" and time.time() - began < 20:
+                time.sleep(0.1)
+            log = "\n".join(api._lines)
+            assert api._state == "idle" and time.time() - began < 3.5, "2 nền tảng phải chạy song song"
+            assert "[Douyin] start dy" in log and "[Xiaohongshu] end xhs" in log
+            assert "[Douyin] Hoàn tất." in log and "[Xiaohongshu] Hoàn tất." in log
+
+            # Dừng: tắt cả tiến trình đang chạy dở
+            assert api.start({**BASE_FORM, "platforms": ["bili", "dy"]}) == {"ok": True}
+            while "Bilibili" not in api.poll()["running"]:
+                time.sleep(0.1)
+            api.stop()
+            stopped = time.time()
+            while api._state != "idle" and time.time() - stopped < 10:
+                time.sleep(0.1)
+            assert api._state == "idle" and "end bili" not in "\n".join(api._lines)
+        finally:
+            ct.BASE_DIR, ct.uv_path, ct.PARALLEL_STAGGER_SEC, ct.save_settings = old
+
+
+def test_old_form_migrates():
+    api = ct.Api()
+    api._settings = {"form": {"platform": "dy", "crawl_type": "search"}}
+    assert api.init()["form"]["platforms"] == ["dy"]
+    api._settings = {"form": {"platforms": ["Douyin"]}}  # nhãn của bản Tkinter
+    assert api.init()["form"]["platforms"] == ["xhs"]
 
 
 def test_parse():
@@ -129,6 +198,9 @@ def test_extract_and_swap():
 
 if __name__ == "__main__":
     test_build_args()
+    test_build_jobs()
+    test_parallel_crawl()
+    test_old_form_migrates()
     test_parse()
     test_normalize_and_library()
     test_thumb_cache()

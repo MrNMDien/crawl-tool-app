@@ -38,11 +38,16 @@ DEFAULT_DATA_DIR = Path.home() / "Documents" / APP_NAME
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: không bật cửa sổ console đen
 
 PLATFORM_CODES = {"dy", "xhs", "ks", "bili", "wb", "tieba", "zhihu"}
+PLATFORM_NAMES = {"dy": "Douyin", "xhs": "Xiaohongshu", "ks": "Kuaishou", "bili": "Bilibili",
+                  "wb": "Weibo", "tieba": "Tieba", "zhihu": "Zhihu"}
+# ponytail: mở Chrome của từng nền tảng cách nhau vài giây để không giành cùng một cổng điều khiển
+# (base chọn cổng trống bằng cách thử bind); nếu vẫn đụng cổng thì cho base nhận cổng cố định theo nền tảng
+PARALLEL_STAGGER_SEC = 8
 TARGET_FLAG = {"search": "--keywords", "detail": "--specified_id", "creator": "--creator_id"}
 LOGIN_TYPES = {"qrcode", "phone", "cookie"}
-FORM_CHOICES = {"platform": PLATFORM_CODES, "crawl_type": set(TARGET_FLAG), "login": LOGIN_TYPES}
+FORM_CHOICES = {"crawl_type": set(TARGET_FLAG), "login": LOGIN_TYPES}
 DEFAULT_FORM = {
-    "platform": "xhs", "crawl_type": "search", "targets": "AI短剧\nAI漫剧", "login": "qrcode",
+    "platforms": ["xhs"], "crawl_type": "search", "targets": "AI短剧\nAI漫剧", "login": "qrcode",
     "max_notes": 20, "comments": False, "max_comments": 10, "media": False, "headless": False,
 }
 
@@ -167,11 +172,26 @@ def uv_env() -> dict:
     return env
 
 
+def build_jobs(values: dict, data_dir: str) -> dict:
+    """Mỗi nền tảng được chọn -> tham số dòng lệnh của một lần chạy main.py."""
+    platforms = values.get("platforms")
+    if not isinstance(platforms, list) or not platforms or not set(platforms) <= PLATFORM_CODES:
+        raise ValueError("Chọn ít nhất một nền tảng")
+    platforms = list(dict.fromkeys(platforms))  # bỏ trùng, giữ thứ tự
+    if len(platforms) > 1 and values.get("crawl_type") != "search":
+        raise ValueError("Chọn nhiều nền tảng chỉ dùng được với kiểu Từ khóa (link/ID là của riêng từng nền tảng)")
+    if len(platforms) > 1 and values.get("login") == "cookie":
+        raise ValueError("Cookie là của riêng một nền tảng: chọn một nền tảng hoặc đổi cách đăng nhập")
+    return {p: build_args({**values, "platform": p}, data_dir) for p in platforms}
+
+
 def build_args(values: dict, data_dir: str) -> list:
-    """Chuyển giá trị trên form thành tham số dòng lệnh cho main.py của base."""
+    """Chuyển giá trị trên form (một nền tảng) thành tham số dòng lệnh cho main.py của base."""
+    if values.get("platform") not in PLATFORM_CODES:
+        raise ValueError("Nền tảng không hợp lệ")
     for key, allowed in FORM_CHOICES.items():
         if values.get(key) not in allowed:
-            raise ValueError("Lựa chọn không hợp lệ, hãy chọn lại nền tảng / kiểu crawl / cách đăng nhập")
+            raise ValueError("Lựa chọn không hợp lệ, hãy chọn lại kiểu crawl / cách đăng nhập")
     targets = [t.strip() for t in str(values.get("targets", "")).replace(",", "\n").splitlines() if t.strip()]
     if not targets:
         raise ValueError("Chưa nhập từ khóa hoặc ID/URL")
@@ -395,7 +415,9 @@ def uninstall() -> None:
 class Api:
     def __init__(self):
         self._settings = load_settings()
-        self._proc = None
+        self._procs = {}  # tên việc -> tiến trình đang chạy
+        self._jobs = {}
+        self._stop_event = threading.Event()
         self._state = "idle"  # idle | updating | crawling
         self._lines = []
         self._dropped = 0
@@ -415,16 +437,18 @@ class Api:
                 del self._lines[:1000]
                 self._dropped += 1000
 
-    def _run_logged(self, cmd: list, cwd: Path) -> int:
-        self._proc = subprocess.Popen(
+    def _run_logged(self, cmd: list, cwd: Path, name: str = "uv", prefix: str = "") -> int:
+        proc = subprocess.Popen(
             cmd, cwd=str(cwd), env=uv_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
         )
-        for raw in self._proc.stdout:
-            self._write(raw.decode("utf-8", errors="replace").rstrip())
-        code = self._proc.wait()
-        self._proc = None
-        return code
+        self._procs[name] = proc
+        try:
+            for raw in proc.stdout:
+                self._write(prefix + raw.decode("utf-8", errors="replace").rstrip())
+            return proc.wait()
+        finally:
+            self._procs.pop(name, None)
 
     def _token(self) -> str:
         blob = self._settings.get("token")
@@ -463,13 +487,27 @@ class Api:
         finally:
             self._state = "idle"
 
-    def _crawl_worker(self, args: list) -> None:
+    def _crawl_one(self, platform: str, args: list) -> None:
+        name = PLATFORM_NAMES[platform]
+        prefix = f"[{name}] " if len(self._jobs) > 1 else ""
         try:
-            code = self._run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *args], BASE_DIR)
-            self._write("Hoàn tất." if code == 0 else f"[LỖI] Crawler dừng với mã {code}.")
-            self._prefetch_thumbs()
+            code = self._run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *args], BASE_DIR, name, prefix)
+            self._write(f"{prefix}Hoàn tất." if code == 0 else f"[LỖI] {prefix}Crawler dừng với mã {code}.")
         except Exception as e:  # noqa: BLE001
-            self._write(f"[LỖI] Không chạy được crawler: {e}")
+            self._write(f"[LỖI] {prefix}Không chạy được crawler: {e}")
+
+    def _crawl_worker(self) -> None:
+        threads = []
+        try:
+            for i, (platform, args) in enumerate(self._jobs.items()):
+                if i and self._stop_event.wait(PARALLEL_STAGGER_SEC):
+                    break  # bấm Dừng trong lúc chờ mở nền tảng tiếp theo
+                t = threading.Thread(target=self._crawl_one, args=(platform, args), daemon=True)
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
+            self._prefetch_thumbs()
         finally:
             self._state = "idle"
             self._lib_rev += 1
@@ -489,7 +527,12 @@ class Api:
 
     # --- gọi từ giao diện ---
     def init(self) -> dict:
-        saved = self._settings.get("form", {})
+        saved = dict(self._settings.get("form", {}))
+        if "platform" in saved and "platforms" not in saved:  # form của bản trước chỉ có 1 nền tảng
+            saved["platforms"] = [saved.pop("platform")]
+        platforms = saved.get("platforms")
+        if not (isinstance(platforms, list) and platforms and set(platforms) <= PLATFORM_CODES):
+            saved.pop("platforms", None)
         form = dict(DEFAULT_FORM)
         for key, value in saved.items():
             # form cũ (bản Tkinter) lưu nhãn thay vì mã: bỏ qua giá trị không hợp lệ
@@ -512,6 +555,7 @@ class Api:
             next_index = self._dropped + len(self._lines)
         return {
             "lines": lines, "next": next_index, "state": self._state,
+            "running": [n for n in self._procs if n in PLATFORM_NAMES.values()],
             "base": self._settings.get("base_sha", "")[:7], "lib_rev": self._lib_rev,
         }
 
@@ -539,22 +583,30 @@ class Api:
         if not BASE_DIR.exists():
             return {"error": "Chưa có base code. Vào tab Cài đặt → Kiểm tra cập nhật."}
         try:
-            args = build_args(values or {}, self._data_dir())
+            jobs = build_jobs(values or {}, self._data_dir())
         except ValueError as e:
             return {"error": str(e)}
         self._settings["form"] = {k: v for k, v in values.items() if k in DEFAULT_FORM}
         save_settings(self._settings)
         Path(self._data_dir()).mkdir(parents=True, exist_ok=True)
-        self._state = "crawling"
+        self._jobs, self._stop_event, self._state = jobs, threading.Event(), "crawling"
         self._write("─" * 60)
-        self._write("Bắt đầu crawl: " + " ".join(redact_args(args)))
-        threading.Thread(target=self._crawl_worker, args=(args,), daemon=True).start()
+        if len(jobs) > 1:
+            names = ", ".join(PLATFORM_NAMES[p] for p in jobs)
+            self._write(f"Crawl song song {len(jobs)} nền tảng: {names}. Mỗi nền tảng mở một cửa sổ Chrome riêng, "
+                        f"cách nhau {PARALLEL_STAGGER_SEC} giây.")
+        for platform, args in jobs.items():
+            self._write(f"Bắt đầu crawl {PLATFORM_NAMES[platform]}: " + " ".join(redact_args(args)))
+        threading.Thread(target=self._crawl_worker, daemon=True).start()
         return {"ok": True}
 
     def stop(self) -> dict:
-        if self._proc:
-            subprocess.run(["taskkill", "/PID", str(self._proc.pid), "/T", "/F"],
+        self._stop_event.set()
+        procs = list(self._procs.values())
+        for proc in procs:
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                            capture_output=True, creationflags=NO_WINDOW)
+        if procs:
             self._write("Đã dừng.")
         return {"ok": True}
 

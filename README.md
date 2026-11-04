@@ -2,7 +2,7 @@
 
 App Windows để chạy MediaCrawler mà không cần gõ lệnh. Giao diện viết bằng HTML (`ui.html`) nhưng hiển thị trong cửa sổ riêng của app qua pywebview/WebView2: không mở trình duyệt, không mở cổng mạng.
 
-- **Crawl**: chọn nền tảng, từ khóa/link, cách đăng nhập; xem nhật ký trực tiếp.
+- **Crawl**: chọn nền tảng, từ khóa/link, cách đăng nhập; xem nhật ký trực tiếp. Với kiểu Từ khóa có thể chọn **nhiều nền tảng cùng lúc**: mỗi nền tảng chạy song song trong một cửa sổ Chrome riêng (mở cách nhau 8 giây), nhật ký có tiền tố tên nền tảng, nút Dừng tắt tất cả.
 - **Thư viện video**: mọi video đã crawl hiện thành lưới ảnh bìa kèm like/view/bình luận/chia sẻ; tìm, lọc theo nền tảng/từ khóa, sắp xếp; mở bài hoặc copy link. Ảnh bìa được tải về máy ngay sau khi crawl (link ảnh của Douyin hết hạn sau vài ngày).
 - **Cài đặt**: thư mục kết quả, cập nhật base code, đổi token, gỡ cài đặt.
 

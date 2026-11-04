@@ -1,10 +1,10 @@
-# Đóng gói CrawlTool.exe (1 file, đã kèm uv.exe). Chạy: powershell -ExecutionPolicy Bypass -File build.ps1
+# Đóng gói CrawlTool.exe (1 file, đã kèm uv.exe và giao diện ui.html). Chạy: powershell -ExecutionPolicy Bypass -File build.ps1
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 $uv = (Get-Command uv).Source
 python test_crawl_tool.py
-uvx --python 3.11 --from pyinstaller pyinstaller --noconfirm --clean --onefile --windowed `
-    --name CrawlTool --add-binary "$uv;." crawl_tool.py
+uvx --python 3.11 --from pyinstaller --with pywebview pyinstaller --noconfirm --clean --onefile --windowed `
+    --name CrawlTool --add-binary "$uv;." --add-data "ui.html;." --collect-all webview crawl_tool.py
 
 Write-Host "Xong: $PSScriptRoot\dist\CrawlTool.exe"

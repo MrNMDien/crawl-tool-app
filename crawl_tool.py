@@ -1,27 +1,28 @@
-"""Crawl Tool: app Tkinter điều khiển MediaCrawler.
+"""Crawl Tool: app Windows điều khiển MediaCrawler.
 
-Base code (MediaCrawler) không đóng gói trong app. App tự tải bản mới nhất từ repo
-GitHub riêng tư về %LOCALAPPDATA%\\CrawlTool\\base, cài thư viện bằng uv rồi chạy
-main.py qua dòng lệnh. Đẩy code mới lên repo là app tự nhận ở lần mở sau.
+Giao diện là HTML (ui.html) hiển thị trong cửa sổ riêng bằng pywebview/WebView2: không mở
+trình duyệt, không mở cổng mạng. Base code (MediaCrawler) không đóng gói trong app: app tự tải
+bản mới nhất từ repo GitHub riêng tư về %LOCALAPPDATA%\\CrawlTool\\base, cài thư viện bằng uv
+rồi chạy main.py qua dòng lệnh. Kết quả crawl (jsonl) được gom thành thư viện video; ảnh bìa
+tải về máy ngay sau khi crawl vì link ảnh của CDN (nhất là Douyin) hết hạn sau vài ngày.
 """
 import base64
 import ctypes
 import io
 import json
 import os
-import queue
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
-import tkinter as tk
 import urllib.error
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
 APP_NAME = "CrawlTool"
 BASE_REPO = "MrNMDien/MediaCrawler"
@@ -36,16 +37,33 @@ DEFAULT_DATA_DIR = Path.home() / "Documents" / APP_NAME
 
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: không bật cửa sổ console đen
 
-PLATFORMS = {
-    "Douyin": "dy", "Xiaohongshu": "xhs", "Kuaishou": "ks", "Bilibili": "bili",
-    "Weibo": "wb", "Baidu Tieba": "tieba", "Zhihu": "zhihu",
-}
-CRAWL_TYPES = {
-    "Tìm theo từ khóa": "search", "Bài/video chỉ định": "detail", "Trang creator": "creator",
-}
-LOGIN_TYPES = {"Quét mã QR": "qrcode", "Số điện thoại": "phone", "Cookie": "cookie"}
-SAVE_FORMATS = ["excel", "csv", "json", "jsonl", "sqlite"]
+PLATFORM_CODES = {"dy", "xhs", "ks", "bili", "wb", "tieba", "zhihu"}
 TARGET_FLAG = {"search": "--keywords", "detail": "--specified_id", "creator": "--creator_id"}
+LOGIN_TYPES = {"qrcode", "phone", "cookie"}
+FORM_CHOICES = {"platform": PLATFORM_CODES, "crawl_type": set(TARGET_FLAG), "login": LOGIN_TYPES}
+DEFAULT_FORM = {
+    "platform": "xhs", "crawl_type": "search", "targets": "AI短剧\nAI漫剧", "login": "qrcode",
+    "max_notes": 20, "comments": False, "max_comments": 10, "media": False, "headless": False,
+}
+
+# Thư mục con mà base ghi kết quả của từng nền tảng -> mã nền tảng trong app
+DATA_DIRS = {"douyin": "dy", "xhs": "xhs", "kuaishou": "ks", "bili": "bili", "weibo": "wb"}
+# Tên trường trong file jsonl của từng nền tảng (None = nền tảng không có trường đó)
+_KEYS = ("id", "url", "cover", "likes", "views", "comments", "shares", "published", "title")
+FIELDS = {
+    "dy": ("aweme_id", "aweme_url", "cover_url", "liked_count", None, "comment_count", "share_count", "create_time", "title"),
+    "xhs": ("note_id", "note_url", "image_list", "liked_count", None, "comment_count", "share_count", "time", "title"),
+    "ks": ("video_id", "video_url", "video_cover_url", "liked_count", "viewd_count", None, None, "create_time", "title"),
+    "bili": ("video_id", "video_url", "video_cover_url", "liked_count", "video_play_count", "video_comment", "video_share_count", "create_time", "title"),
+    "wb": ("note_id", "note_url", None, "liked_count", None, "comments_count", "shared_count", "create_time", "content"),
+}
+# Ảnh bìa có chống hotlink: phải gửi Referer của đúng nền tảng
+THUMB_REFERER = {
+    "dy": "https://www.douyin.com/", "xhs": "https://www.xiaohongshu.com/",
+    "ks": "https://www.kuaishou.com/", "bili": "https://www.bilibili.com/",
+}
+MAX_THUMB_BYTES = 5 * 1024 * 1024
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 
 # ---------- Lưu token GitHub: mã hóa bằng DPAPI của Windows, chỉ user hiện tại giải được ----------
@@ -151,29 +169,40 @@ def uv_env() -> dict:
 
 def build_args(values: dict, data_dir: str) -> list:
     """Chuyển giá trị trên form thành tham số dòng lệnh cho main.py của base."""
-    crawl_type = CRAWL_TYPES[values["crawl_type"]]
-    targets = [t.strip() for t in values["targets"].replace(",", "\n").splitlines() if t.strip()]
+    for key, allowed in FORM_CHOICES.items():
+        if values.get(key) not in allowed:
+            raise ValueError("Lựa chọn không hợp lệ, hãy chọn lại nền tảng / kiểu crawl / cách đăng nhập")
+    targets = [t.strip() for t in str(values.get("targets", "")).replace(",", "\n").splitlines() if t.strip()]
     if not targets:
         raise ValueError("Chưa nhập từ khóa hoặc ID/URL")
-    login = LOGIN_TYPES[values["login"]]
+    try:
+        max_notes, max_comments = int(values["max_notes"]), int(values["max_comments"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("Số bài và số bình luận phải là số") from None
     args = [
-        "--platform", PLATFORMS[values["platform"]],
-        "--type", crawl_type,
-        TARGET_FLAG[crawl_type], ",".join(targets),
-        "--lt", login,
-        "--crawler_max_notes_count", str(int(values["max_notes"])),
-        "--get_comment", "true" if values["comments"] else "false",
-        "--max_comments_count_singlenotes", str(int(values["max_comments"])),
-        "--get_media", "true" if values["media"] else "false",
-        "--save_data_option", values["save_format"],
+        "--platform", values["platform"],
+        "--type", values["crawl_type"],
+        TARGET_FLAG[values["crawl_type"]], ",".join(targets),
+        "--lt", values["login"],
+        "--crawler_max_notes_count", str(max(1, max_notes)),
+        "--get_comment", "true" if values.get("comments") else "false",
+        "--max_comments_count_singlenotes", str(max(1, max_comments)),
+        "--get_media", "true" if values.get("media") else "false",
+        "--save_data_option", "jsonl",  # thư viện video đọc jsonl, không xuất Excel
         "--save_data_path", data_dir,
-        "--headless", "true" if values["headless"] else "false",
+        "--headless", "true" if values.get("headless") else "false",
     ]
-    if login == "cookie":
-        if not values["cookies"].strip():
+    if values["login"] == "cookie":
+        cookies = str(values.get("cookies", "")).strip()
+        if not cookies:
             raise ValueError("Đăng nhập bằng cookie nhưng chưa dán cookie")
-        args += ["--cookies", values["cookies"].strip()]
+        args += ["--cookies", cookies]
     return args
+
+
+def redact_args(args: list) -> list:
+    """Bản để in ra log: giấu giá trị cookie."""
+    return ["***" if i and args[i - 1] == "--cookies" else a for i, a in enumerate(args)]
 
 
 def find_chrome() -> bool:
@@ -184,7 +213,137 @@ def find_chrome() -> bool:
     return any(p.is_file() for p in candidates)
 
 
+# ---------- Thư viện video ----------
+
+def parse_count(value) -> int:
+    """'1.2万' -> 12000, '10万+' -> 100000, '3,456' -> 3456; không đọc được thì 0."""
+    text = str(value or "").strip().replace(",", "").rstrip("+")
+    multiplier = 1
+    if text.endswith("万"):
+        multiplier, text = 10_000, text[:-1]
+    elif text.endswith("亿"):
+        multiplier, text = 100_000_000, text[:-1]
+    try:
+        return int(float(text) * multiplier)
+    except ValueError:
+        return 0
+
+
+def parse_time(value) -> int:
+    """Timestamp giây; nền tảng trả mili-giây thì đổi về giây; không đọc được thì 0."""
+    try:
+        ts = int(float(value))
+    except (TypeError, ValueError):
+        return 0
+    return ts // 1000 if ts > 10**12 else ts
+
+
+def safe_key(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "", text)[:80]
+
+
+def normalize(platform: str, row: dict):
+    """Gom một dòng jsonl của từng nền tảng về cùng một dạng cho giao diện."""
+    fields = dict(zip(_KEYS, FIELDS[platform]))
+
+    def get(key):
+        return row.get(fields[key]) if fields[key] else None
+
+    item_id = safe_key(str(get("id") or ""))
+    if not item_id:
+        return None
+    url = str(get("url") or "")
+    cover = str(get("cover") or "").split(",")[0].strip()
+    if cover.startswith("http://"):
+        cover = "https://" + cover[len("http://"):]
+    return {
+        "key": f"{platform}_{item_id}",
+        "platform": platform,
+        "title": str(get("title") or row.get("desc") or "").strip()[:300],
+        "url": url if url.startswith(("https://", "http://")) else "",
+        "cover": cover if cover.startswith("https://") else "",
+        "likes": parse_count(get("likes")),
+        "views": parse_count(get("views")),
+        "comments": parse_count(get("comments")),
+        "shares": parse_count(get("shares")),
+        "published": parse_time(get("published")),
+        "crawled": parse_time(row.get("last_modify_ts")),
+        "keyword": str(row.get("source_keyword") or ""),
+        "author": str(row.get("nickname") or ""),
+    }
+
+
+def load_library(data_dir: str) -> list:
+    """Đọc mọi file *_contents_*.jsonl, gộp trùng theo nền tảng + ID (giữ bản crawl mới nhất)."""
+    items = {}
+    for dirname, platform in DATA_DIRS.items():
+        for path in sorted((Path(data_dir) / dirname / "jsonl").glob("*_contents_*.jsonl")):
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    item = normalize(platform, row) if isinstance(row, dict) else None
+                    if item and item["crawled"] >= items.get(item["key"], {}).get("crawled", -1):
+                        items[item["key"]] = item
+    return list(items.values())
+
+
+def image_mime(data: bytes) -> str:
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG"):
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"GIF8"):
+        return "image/gif"
+    if data[4:12] in (b"ftypavif", b"ftypheic"):
+        return "image/avif"
+    return ""
+
+
+def thumb_file(data_dir: str, key: str) -> Path:
+    return Path(data_dir) / "thumbs" / f"{safe_key(key)}.img"
+
+
+def download_thumb(item: dict, data_dir: str):
+    """Tải ảnh bìa về máy (một lần). Trả về đường dẫn file, hoặc None nếu không tải được."""
+    path = thumb_file(data_dir, item["key"])
+    if path.exists():
+        return path
+    if not item.get("cover"):
+        return None
+    req = urllib.request.Request(item["cover"], headers={
+        "Referer": THUMB_REFERER.get(item["platform"], ""), "User-Agent": BROWSER_UA,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read(MAX_THUMB_BYTES + 1)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    if len(data) > MAX_THUMB_BYTES or not image_mime(data):
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".part")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+    return path
+
+
+def thumb_data_uri(path: Path) -> str:
+    # ponytail: gửi nguyên ảnh gốc sang giao diện; nếu thư viện lên vài nghìn video thì thu nhỏ ảnh khi tải về
+    data = path.read_bytes()
+    return f"data:{image_mime(data)};base64,{base64.b64encode(data).decode()}"
+
+
 # ---------- Tự cài đặt / gỡ cài đặt (khi chạy từ file .exe) ----------
+
+def ask_yes_no(text: str) -> bool:
+    MB_YESNO, MB_ICONQUESTION, IDYES = 0x04, 0x20, 6
+    return ctypes.windll.user32.MessageBoxW(None, text, APP_NAME, MB_YESNO | MB_ICONQUESTION) == IDYES
+
 
 def _ps_quote(path) -> str:
     return "'" + str(path).replace("'", "''") + "'"
@@ -206,7 +365,7 @@ def self_install_if_needed() -> bool:
     exe = Path(sys.executable)
     if exe.parent.resolve() == INSTALL_DIR.resolve():
         return False
-    if not messagebox.askyesno(APP_NAME, f"Cài {APP_NAME} vào máy?\n\nThư mục: {INSTALL_DIR}\nTạo shortcut ở Desktop và Start Menu."):
+    if not ask_yes_no(f"Cài {APP_NAME} vào máy?\n\nThư mục: {INSTALL_DIR}\nTạo shortcut ở Desktop và Start Menu."):
         return False
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
     target = INSTALL_DIR / f"{APP_NAME}.exe"
@@ -229,273 +388,236 @@ def uninstall() -> None:
     )
 
 
-# ---------- Giao diện ----------
+# ---------- Cầu nối cho giao diện HTML ----------
+# Mọi method public của Api được gọi từ JavaScript (window.pywebview.api.<tên>).
+# Trạng thái nội bộ đặt tên bắt đầu bằng "_" để pywebview không đưa sang JavaScript.
 
-class App:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.settings = load_settings()
-        self.proc = None
-        self.busy = False
-        self.log_queue = queue.Queue()
+class Api:
+    def __init__(self):
+        self._settings = load_settings()
+        self._proc = None
+        self._state = "idle"  # idle | updating | crawling
+        self._lines = []
+        self._dropped = 0
+        self._lock = threading.Lock()
+        self._library = {}
+        self._lib_rev = 0
+        self._window = None
 
-        root.title(APP_NAME)
-        root.geometry("900x680")
-        root.minsize(760, 560)
-        root.protocol("WM_DELETE_WINDOW", self.on_close)
+    # --- tiện ích nội bộ ---
+    def _data_dir(self) -> str:
+        return self._settings.get("data_dir", str(DEFAULT_DATA_DIR))
 
-        menu = tk.Menu(root)
-        tools = tk.Menu(menu, tearoff=False)
-        tools.add_command(label="Kiểm tra cập nhật base code", command=self.check_update)
-        tools.add_command(label="Đổi GitHub token", command=self.ask_token)
-        tools.add_command(label="Đổi thư mục lưu kết quả", command=self.choose_data_dir)
-        tools.add_separator()
-        tools.add_command(label="Gỡ cài đặt", command=self.on_uninstall)
-        menu.add_cascade(label="Công cụ", menu=tools)
-        root.config(menu=menu)
+    def _write(self, line: str) -> None:
+        with self._lock:
+            self._lines.append(line)
+            if len(self._lines) > 5000:
+                del self._lines[:1000]
+                self._dropped += 1000
 
-        form = ttk.Frame(root, padding=10)
-        form.pack(fill="x")
-        saved = self.settings.get("form", {})
-        self.vars = {
-            "platform": tk.StringVar(value=saved.get("platform", "Douyin")),
-            "crawl_type": tk.StringVar(value=saved.get("crawl_type", "Tìm theo từ khóa")),
-            "login": tk.StringVar(value=saved.get("login", "Quét mã QR")),
-            "max_notes": tk.IntVar(value=saved.get("max_notes", 20)),
-            "comments": tk.BooleanVar(value=saved.get("comments", False)),
-            "max_comments": tk.IntVar(value=saved.get("max_comments", 10)),
-            "media": tk.BooleanVar(value=saved.get("media", False)),
-            "save_format": tk.StringVar(value=saved.get("save_format", "excel")),
-            "headless": tk.BooleanVar(value=saved.get("headless", False)),
-        }
-
-        def row(r, label, widget):
-            ttk.Label(form, text=label).grid(row=r, column=0, sticky="w", pady=3)
-            widget.grid(row=r, column=1, sticky="we", pady=3)
-
-        form.columnconfigure(1, weight=1)
-        row(0, "Nền tảng", ttk.Combobox(form, textvariable=self.vars["platform"], values=list(PLATFORMS), state="readonly"))
-        row(1, "Kiểu crawl", ttk.Combobox(form, textvariable=self.vars["crawl_type"], values=list(CRAWL_TYPES), state="readonly"))
-        self.targets = tk.Text(form, height=4, wrap="word")
-        self.targets.insert("1.0", saved.get("targets", "AI短剧\nAI漫剧"))
-        row(2, "Từ khóa / ID / URL\n(mỗi dòng một cái)", self.targets)
-        row(3, "Đăng nhập", ttk.Combobox(form, textvariable=self.vars["login"], values=list(LOGIN_TYPES), state="readonly"))
-        self.cookies = ttk.Entry(form, show="•")
-        row(4, "Cookie (nếu chọn Cookie)", self.cookies)
-
-        opts = ttk.Frame(form)
-        ttk.Label(opts, text="Số bài tối đa").pack(side="left")
-        ttk.Spinbox(opts, from_=1, to=1000, width=6, textvariable=self.vars["max_notes"]).pack(side="left", padx=(4, 14))
-        ttk.Checkbutton(opts, text="Lấy bình luận, tối đa", variable=self.vars["comments"]).pack(side="left")
-        ttk.Spinbox(opts, from_=1, to=1000, width=6, textvariable=self.vars["max_comments"]).pack(side="left", padx=(4, 14))
-        ttk.Checkbutton(opts, text="Tải video/ảnh", variable=self.vars["media"]).pack(side="left", padx=(0, 14))
-        ttk.Checkbutton(opts, text="Chạy ẩn trình duyệt", variable=self.vars["headless"]).pack(side="left")
-        row(5, "Tùy chọn", opts)
-        row(6, "Định dạng lưu", ttk.Combobox(form, textvariable=self.vars["save_format"], values=SAVE_FORMATS, state="readonly", width=10))
-
-        buttons = ttk.Frame(root, padding=(10, 0))
-        buttons.pack(fill="x")
-        self.start_btn = ttk.Button(buttons, text="▶ Bắt đầu", command=self.start)
-        self.start_btn.pack(side="left")
-        self.stop_btn = ttk.Button(buttons, text="■ Dừng", command=self.stop, state="disabled")
-        self.stop_btn.pack(side="left", padx=6)
-        ttk.Button(buttons, text="📂 Mở thư mục kết quả", command=self.open_data_dir).pack(side="left")
-        self.status = ttk.Label(buttons, text="")
-        self.status.pack(side="right")
-
-        self.log = scrolledtext.ScrolledText(root, height=20, state="disabled", font=("Consolas", 9))
-        self.log.pack(fill="both", expand=True, padx=10, pady=10)
-
-        self.root.after(100, self.drain_log)
-        self.write("Khi crawl, app tự mở một cửa sổ Chrome riêng (không đụng Chrome cá nhân). "
-                   "Lần đầu hãy quét mã QR đăng nhập trong cửa sổ đó, các lần sau app nhớ phiên đăng nhập.")
-        if not find_chrome():
-            self.write("[CẢNH BÁO] Không thấy Google Chrome. Hãy cài Chrome bản mới nhất.")
-        if not shutil.which("node"):
-            self.write("[CẢNH BÁO] Không thấy Node.js. Douyin và Zhihu cần Node.js để tính chữ ký: https://nodejs.org")
-        self.refresh_status()
-        self.check_update()
-
-    # --- tiện ích ---
-    @property
-    def data_dir(self) -> str:
-        return self.settings.get("data_dir", str(DEFAULT_DATA_DIR))
-
-    def write(self, line: str) -> None:
-        self.log_queue.put(line)
-
-    def drain_log(self) -> None:
-        lines = []
-        while not self.log_queue.empty():
-            lines.append(self.log_queue.get_nowait())
-        if lines:
-            self.log.configure(state="normal")
-            self.log.insert("end", "\n".join(lines) + "\n")
-            if int(self.log.index("end").split(".")[0]) > 5000:
-                self.log.delete("1.0", "1000.0")
-            self.log.see("end")
-            self.log.configure(state="disabled")
-        self.root.after(100, self.drain_log)
-
-    def refresh_status(self) -> None:
-        sha = self.settings.get("base_sha", "")
-        self.status.config(text=f"Base: {sha[:7]}" if sha else "Base: chưa cài")
-
-    def set_busy(self, busy: bool) -> None:
-        self.busy = busy
-        self.root.after(0, lambda: (
-            self.start_btn.config(state="disabled" if busy else "normal"),
-            self.stop_btn.config(state="normal" if self.proc else "disabled"),
-        ))
-
-    def form_values(self) -> dict:
-        values = {k: v.get() for k, v in self.vars.items()}
-        values["targets"] = self.targets.get("1.0", "end").strip()
-        values["cookies"] = self.cookies.get()
-        return values
-
-    def run_logged(self, cmd: list, cwd: Path) -> int:
-        self.proc = subprocess.Popen(
+    def _run_logged(self, cmd: list, cwd: Path) -> int:
+        self._proc = subprocess.Popen(
             cmd, cwd=str(cwd), env=uv_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
         )
-        self.set_busy(True)
-        for raw in self.proc.stdout:
-            self.write(raw.decode("utf-8", errors="replace").rstrip())
-        code = self.proc.wait()
-        self.proc = None
+        for raw in self._proc.stdout:
+            self._write(raw.decode("utf-8", errors="replace").rstrip())
+        code = self._proc.wait()
+        self._proc = None
         return code
 
-    # --- token & thư mục ---
-    def token(self) -> str:
-        blob = self.settings.get("token")
-        if blob:
-            try:
-                return decrypt_token(blob)
-            except OSError:
-                self.write("[LỖI] Không giải mã được token đã lưu, hãy nhập lại.")
-        return self.ask_token()
-
-    def ask_token(self) -> str:
-        token = simpledialog.askstring(
-            "GitHub token",
-            f"Nhập GitHub token để tải base code từ repo riêng tư {BASE_REPO}.\n\n"
-            "Tạo ở GitHub → Settings → Developer settings → Fine-grained tokens:\n"
-            f"chỉ chọn repo {BASE_REPO.split('/')[1]}, quyền Contents: Read-only.",
-            show="•", parent=self.root,
-        )
-        if token:
-            self.settings["token"] = encrypt_token(token.strip())
-            save_settings(self.settings)
-            return token.strip()
-        return ""
-
-    def choose_data_dir(self) -> None:
-        chosen = filedialog.askdirectory(initialdir=self.data_dir, parent=self.root)
-        if chosen:
-            self.settings["data_dir"] = chosen
-            save_settings(self.settings)
-            self.write(f"Kết quả sẽ lưu vào: {chosen}")
-
-    def open_data_dir(self) -> None:
-        Path(self.data_dir).mkdir(parents=True, exist_ok=True)
-        os.startfile(self.data_dir)
-
-    # --- cập nhật base ---
-    def check_update(self) -> None:
-        if self.busy:
-            return
-        token = self.token()
-        if not token:
-            self.write("[CẢNH BÁO] Chưa có GitHub token nên chưa tải được base code (menu Công cụ → Đổi GitHub token).")
-            return
-        self.set_busy(True)
-        threading.Thread(target=self._update_worker, args=(token,), daemon=True).start()
+    def _token(self) -> str:
+        blob = self._settings.get("token")
+        if not blob:
+            return ""
+        try:
+            return decrypt_token(blob)
+        except OSError:
+            self._write("[LỖI] Không giải mã được token đã lưu, hãy nhập lại trong tab Cài đặt.")
+            return ""
 
     def _update_worker(self, token: str) -> None:
         try:
-            self.write("Đang kiểm tra bản mới của base code...")
+            self._write("Đang kiểm tra bản mới của base code...")
             sha = latest_sha(token)
-            if sha == self.settings.get("base_sha") and BASE_DIR.exists():
-                self.write(f"Base code đã là bản mới nhất ({sha[:7]}).")
+            if sha == self._settings.get("base_sha") and BASE_DIR.exists():
+                self._write(f"Base code đã là bản mới nhất ({sha[:7]}).")
                 return
-            self.write(f"Đang tải base code {sha[:7]}...")
+            self._write(f"Đang tải base code {sha[:7]}...")
             zip_bytes = github_get(f"https://api.github.com/repos/{BASE_REPO}/zipball/{sha}", token)
             new_dir = APP_HOME / "base_new"
             shutil.rmtree(new_dir, ignore_errors=True)
             extract_zipball(zip_bytes, new_dir)
-            self.write("Đang cài thư viện (lần đầu sẽ lâu vì phải tải Python và thư viện)...")
-            if self.run_logged([uv_path(), "sync"], new_dir) != 0:
+            self._write("Đang cài thư viện (lần đầu sẽ lâu vì phải tải Python và thư viện)...")
+            if self._run_logged([uv_path(), "sync"], new_dir) != 0:
                 raise RuntimeError("uv sync thất bại, xem log ở trên")
             swap_base(new_dir)
-            self.settings["base_sha"] = sha
-            save_settings(self.settings)
-            self.write(f"Đã cập nhật base code lên {sha[:7]}.")
+            self._settings["base_sha"] = sha
+            save_settings(self._settings)
+            self._write(f"Đã cập nhật base code lên {sha[:7]}.")
         except urllib.error.HTTPError as e:
-            hint = " (token sai, hết hạn hoặc không có quyền vào repo)" if e.code in (401, 403, 404) else ""
-            self.write(f"[LỖI] GitHub trả về {e.code}{hint}")
+            hint = " (token sai, hết hạn hoặc không có quyền vào repo: đổi token trong tab Cài đặt)" if e.code in (401, 403, 404) else ""
+            self._write(f"[LỖI] GitHub trả về {e.code}{hint}")
         except Exception as e:  # noqa: BLE001 - lỗi nào cũng phải hiện cho người dùng thấy
-            self.write(f"[LỖI] Cập nhật thất bại: {e}")
+            self._write(f"[LỖI] Cập nhật thất bại: {e}")
         finally:
-            self.set_busy(False)
-            self.root.after(0, self.refresh_status)
-
-    # --- chạy crawler ---
-    def start(self) -> None:
-        if not BASE_DIR.exists():
-            messagebox.showwarning(APP_NAME, "Chưa có base code. Vào menu Công cụ → Kiểm tra cập nhật.")
-            return
-        values = self.form_values()
-        try:
-            args = build_args(values, self.data_dir)
-        except ValueError as e:
-            messagebox.showwarning(APP_NAME, str(e))
-            return
-        self.settings["form"] = {k: v for k, v in values.items() if k != "cookies"}
-        save_settings(self.settings)
-        Path(self.data_dir).mkdir(parents=True, exist_ok=True)
-        self.write("─" * 60)
-        self.write("Bắt đầu crawl: " + " ".join(a for a in args if not a.startswith("--cookies")))
-        threading.Thread(target=self._crawl_worker, args=(args,), daemon=True).start()
+            self._state = "idle"
 
     def _crawl_worker(self, args: list) -> None:
         try:
-            code = self.run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *args], BASE_DIR)
-            self.write("Hoàn tất." if code == 0 else f"[LỖI] Crawler dừng với mã {code}.")
+            code = self._run_logged([uv_path(), "run", "--no-sync", "python", "main.py", *args], BASE_DIR)
+            self._write("Hoàn tất." if code == 0 else f"[LỖI] Crawler dừng với mã {code}.")
+            self._prefetch_thumbs()
         except Exception as e:  # noqa: BLE001
-            self.write(f"[LỖI] Không chạy được crawler: {e}")
+            self._write(f"[LỖI] Không chạy được crawler: {e}")
         finally:
-            self.set_busy(False)
+            self._state = "idle"
+            self._lib_rev += 1
 
-    def stop(self) -> None:
-        if self.proc:
-            subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"],
-                           capture_output=True, creationflags=NO_WINDOW)
-            self.write("Đã dừng.")
-
-    def on_uninstall(self) -> None:
-        if messagebox.askyesno(APP_NAME, f"Gỡ {APP_NAME}?\n\nXóa app, base code và token đã lưu.\n"
-                                         f"Thư mục kết quả ({self.data_dir}) được giữ lại."):
-            self.stop()
-            uninstall()
-            self.root.destroy()
-
-    def on_close(self) -> None:
-        if self.proc and not messagebox.askyesno(APP_NAME, "Crawler đang chạy. Dừng và thoát?"):
+    def _prefetch_thumbs(self) -> None:
+        data_dir = self._data_dir()
+        todo = [i for i in load_library(data_dir) if i["cover"] and not thumb_file(data_dir, i["key"]).exists()]
+        if not todo:
             return
+        self._write(f"Đang tải {len(todo)} ảnh bìa về máy...")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            ok = sum(1 for p in pool.map(lambda i: download_thumb(i, data_dir), todo) if p)
+        self._write(f"Đã tải {ok}/{len(todo)} ảnh bìa.")
+
+    def _on_closed(self) -> None:
         self.stop()
-        self.root.destroy()
+
+    # --- gọi từ giao diện ---
+    def init(self) -> dict:
+        saved = self._settings.get("form", {})
+        form = dict(DEFAULT_FORM)
+        for key, value in saved.items():
+            # form cũ (bản Tkinter) lưu nhãn thay vì mã: bỏ qua giá trị không hợp lệ
+            if key in form and (key not in FORM_CHOICES or value in FORM_CHOICES[key]):
+                form[key] = value
+        warnings = []
+        if not find_chrome():
+            warnings.append("Không thấy Google Chrome. Hãy cài Chrome bản mới nhất.")
+        if not shutil.which("node"):
+            warnings.append("Không thấy Node.js. Douyin và Zhihu cần Node.js để tính chữ ký: https://nodejs.org")
+        return {
+            "form": form, "data_dir": self._data_dir(), "has_token": bool(self._settings.get("token")),
+            "warnings": warnings, "repo": BASE_REPO,
+        }
+
+    def poll(self, since=0) -> dict:
+        with self._lock:
+            start = max(int(since) - self._dropped, 0)
+            lines = self._lines[start:]
+            next_index = self._dropped + len(self._lines)
+        return {
+            "lines": lines, "next": next_index, "state": self._state,
+            "base": self._settings.get("base_sha", "")[:7], "lib_rev": self._lib_rev,
+        }
+
+    def set_token(self, token) -> dict:
+        token = str(token or "").strip()
+        if not token:
+            return {"error": "Chưa nhập token"}
+        self._settings["token"] = encrypt_token(token)
+        save_settings(self._settings)
+        return self.check_update()
+
+    def check_update(self) -> dict:
+        if self._state != "idle":
+            return {"error": "App đang bận, đợi xong rồi thử lại."}
+        token = self._token()
+        if not token:
+            return {"error": "need_token"}
+        self._state = "updating"
+        threading.Thread(target=self._update_worker, args=(token,), daemon=True).start()
+        return {"ok": True}
+
+    def start(self, values) -> dict:
+        if self._state != "idle":
+            return {"error": "App đang bận, đợi xong rồi thử lại."}
+        if not BASE_DIR.exists():
+            return {"error": "Chưa có base code. Vào tab Cài đặt → Kiểm tra cập nhật."}
+        try:
+            args = build_args(values or {}, self._data_dir())
+        except ValueError as e:
+            return {"error": str(e)}
+        self._settings["form"] = {k: v for k, v in values.items() if k in DEFAULT_FORM}
+        save_settings(self._settings)
+        Path(self._data_dir()).mkdir(parents=True, exist_ok=True)
+        self._state = "crawling"
+        self._write("─" * 60)
+        self._write("Bắt đầu crawl: " + " ".join(redact_args(args)))
+        threading.Thread(target=self._crawl_worker, args=(args,), daemon=True).start()
+        return {"ok": True}
+
+    def stop(self) -> dict:
+        if self._proc:
+            subprocess.run(["taskkill", "/PID", str(self._proc.pid), "/T", "/F"],
+                           capture_output=True, creationflags=NO_WINDOW)
+            self._write("Đã dừng.")
+        return {"ok": True}
+
+    def library(self) -> list:
+        data_dir = self._data_dir()
+        items = load_library(data_dir)
+        self._library = {i["key"]: i for i in items}
+        return items
+
+    def thumb(self, key) -> str:
+        item = self._library.get(key)
+        path = download_thumb(item, self._data_dir()) if item else None
+        return thumb_data_uri(path) if path else ""
+
+    def open_url(self, url) -> None:
+        if isinstance(url, str) and url.startswith(("https://", "http://")):
+            os.startfile(url)
+
+    def copy(self, text) -> None:
+        # Truyền qua biến môi trường để nội dung không bị PowerShell hiểu thành lệnh
+        env = dict(os.environ, CRAWLTOOL_CLIP=str(text))
+        subprocess.run(["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value $env:CRAWLTOOL_CLIP"],
+                       env=env, creationflags=NO_WINDOW)
+
+    def open_data_dir(self) -> None:
+        Path(self._data_dir()).mkdir(parents=True, exist_ok=True)
+        os.startfile(self._data_dir())
+
+    def choose_data_dir(self) -> str:
+        import webview
+        dialog = getattr(webview, "FileDialog", None)
+        kind = dialog.FOLDER if dialog else webview.FOLDER_DIALOG
+        chosen = self._window.create_file_dialog(kind, directory=self._data_dir())
+        if not chosen:
+            return ""
+        self._settings["data_dir"] = chosen[0]
+        save_settings(self._settings)
+        self._lib_rev += 1
+        return chosen[0]
+
+    def uninstall_app(self) -> None:
+        self.stop()
+        uninstall()
+        self._window.destroy()
+
+
+def ui_html() -> str:
+    root = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
+    return (root / "ui.html").read_text(encoding="utf-8")
 
 
 def main() -> None:
-    root = tk.Tk()
-    root.withdraw()
     if self_install_if_needed():
-        root.destroy()
         return
-    root.deiconify()
-    App(root)
-    root.mainloop()
+    import webview
+
+    api = Api()
+    window = webview.create_window(
+        APP_NAME, html=ui_html(), js_api=api, width=1320, height=860, min_size=(1000, 640),
+    )
+    api._window = window
+    window.events.closed += api._on_closed
+    webview.start()
 
 
 if __name__ == "__main__":

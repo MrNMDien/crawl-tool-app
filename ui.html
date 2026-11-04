@@ -263,6 +263,12 @@
   .modal ol { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; display: flex; flex-direction: column; gap: 3px; }
   .modal .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
   .modal .error { color: var(--danger); font-size: 13px; min-height: 18px; }
+  #ctx { position: fixed; z-index: 70; min-width: 180px; padding: 4px; display: none; }
+  #ctx.open { display: block; }
+  #ctx button { display: flex; width: 100%; justify-content: space-between; gap: 18px; border: 0; background: none; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  #ctx button:hover:not(:disabled) { background: var(--hover); }
+  #ctx button:disabled { opacity: .4; cursor: default; }
+  #ctx kbd { color: var(--faint); font: inherit; font-size: 12px; }
   #toast {
     position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
     background: var(--text); color: var(--panel); padding: 9px 16px; border-radius: 10px; font-weight: 600; font-size: 13px;
@@ -497,6 +503,7 @@
 </div>
 
 <div id="toast"></div>
+<div class="card" id="ctx"></div>
 
 <script>
 "use strict";
@@ -1312,6 +1319,52 @@ $("btn-choose-dir").onclick = async () => {
 $("btn-uninstall").onclick = async () => {
   if (await confirmBox("Gỡ CrawlTool?", "Xóa app, base code và token đã lưu. Thư mục kết quả và thư viện được giữ lại.")) api().uninstall_app();
 };
+
+// ---------- Menu chuột phải ----------
+// Cửa sổ app (WebView2 qua pywebview) không có menu chuột phải mặc định, nên tự làm Cắt/Copy/Dán.
+const ctx = $("ctx");
+const closeCtx = () => ctx.classList.remove("open");
+function ctxItem(label, key, enabled, action) {
+  const b = el("button");
+  b.type = "button";
+  b.append(el("span", "", label), el("kbd", "", key));
+  b.disabled = !enabled;
+  b.onmousedown = (e) => e.preventDefault();  // giữ con trỏ và vùng chọn trong ô nhập
+  b.onclick = async () => { closeCtx(); await action(); };
+  return b;
+}
+function insertText(field, text) {
+  field.focus();
+  field.setRangeText(text, field.selectionStart, field.selectionEnd, "end");
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+}
+document.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  const field = e.target.closest('input[type=text], input[type=password], textarea');
+  const secret = field?.type === "password";
+  const selected = field ? field.value.slice(field.selectionStart, field.selectionEnd) : String(window.getSelection());
+  const items = [];
+  if (field) items.push(ctxItem("Cắt", "Ctrl+X", !!selected && !secret, async () => { await api().copy(selected); insertText(field, ""); }));
+  items.push(ctxItem("Copy", "Ctrl+C", !!selected && !secret, async () => { await api().copy(selected); toast("Đã copy"); }));
+  if (field) {
+    items.push(ctxItem("Dán", "Ctrl+V", true, async () => {
+      const res = await api().read_clipboard();
+      if (res.error) return toast(res.error, true);
+      if (!res.text) return toast("Clipboard không có chữ để dán", true);
+      insertText(field, field.tagName === "INPUT" ? res.text.replace(/\s*\r?\n\s*/g, " ") : res.text);
+    }));
+    items.push(ctxItem("Chọn tất cả", "Ctrl+A", !!field.value, () => { field.focus(); field.select(); }));
+  }
+  if (!items.some((b) => !b.disabled)) return closeCtx();
+  ctx.replaceChildren(...items);
+  ctx.classList.add("open");
+  const box = ctx.getBoundingClientRect();
+  ctx.style.left = Math.min(e.clientX, window.innerWidth - box.width - 8) + "px";
+  ctx.style.top = Math.min(e.clientY, window.innerHeight - box.height - 8) + "px";
+});
+document.addEventListener("mousedown", (e) => { if (!ctx.contains(e.target)) closeCtx(); });
+document.addEventListener("keydown", (e) => e.key === "Escape" && closeCtx());
+window.addEventListener("blur", closeCtx);
 
 // ---------- Khởi động ----------
 window.addEventListener("pywebviewready", async () => {

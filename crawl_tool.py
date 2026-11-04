@@ -736,6 +736,32 @@ def thumb_data_uri(path: Path) -> str:
     return f"data:{image_mime(data)};base64,{base64.b64encode(data).decode()}"
 
 
+def get_clipboard() -> str:
+    """Đọc chữ trong clipboard Windows (menu chuột phải → Dán của giao diện dùng)."""
+    CF_UNICODETEXT = 13
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    for _ in range(20):  # clipboard có thể đang bị app khác giữ trong chốc lát
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        raise OSError("clipboard đang bị ứng dụng khác dùng")
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return ""  # clipboard đang chứa ảnh/file, không phải chữ
+        pointer = kernel32.GlobalLock(handle)
+        try:
+            return ctypes.wstring_at(pointer)
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
 def set_clipboard(text: str) -> None:
     """Ghi chữ vào clipboard Windows (Unicode, không giới hạn độ dài như cách gọi PowerShell)."""
     CF_UNICODETEXT, GMEM_MOVEABLE = 13, 0x0002
@@ -1468,6 +1494,12 @@ class Api:
     def copy(self, text) -> None:
         set_clipboard(str(text))
 
+    def read_clipboard(self) -> dict:
+        try:
+            return {"text": get_clipboard()}
+        except OSError as e:
+            return {"error": f"Không đọc được clipboard: {e}"}
+
     def copy_log(self) -> dict:
         """Copy toàn bộ nhật ký của phiên này (kể cả phần đã xóa khỏi màn hình) để gửi đi phân tích."""
         with self._lock:
@@ -1512,7 +1544,9 @@ def main() -> None:
 
     api = Api()
     window = webview.create_window(
-        APP_NAME, html=ui_html(), js_api=api, width=1320, height=860, min_size=(1000, 640),
+        # text_select: cho bôi đen/copy chữ (mặc định pywebview chặn). Menu chuột phải mặc định của
+        # WebView2 bị pywebview tắt khi không debug, nên ui.html tự làm menu Cắt/Copy/Dán.
+        APP_NAME, html=ui_html(), js_api=api, width=1320, height=860, min_size=(1000, 640), text_select=True,
     )
     api._window = window
     window.events.closed += api._on_closed

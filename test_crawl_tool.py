@@ -445,16 +445,16 @@ def test_app_self_update():
     exe_bytes = b"MZ" + b"\0" * 1_200_000
     sha = __import__("hashlib").sha256(exe_bytes).hexdigest()
     releases = [
-        {"tag_name": "app-v1.3.0", "draft": True, "assets": [{"name": "CrawlTool.exe", "url": "u-draft"}]},  # nháp: bỏ
-        {"tag_name": "app-v1.2.0", "body": f"Sửa dán\n\nsha256: {sha}", "assets": [{"name": "CrawlTool.exe", "url": "u-120", "size": 9}]},
+        {"tag_name": "app-v1.3.0", "draft": True, "assets": [{"name": "CrawlTool.exe", "browser_download_url": "u-draft"}]},  # nháp: bỏ
+        {"tag_name": "app-v1.2.0", "body": f"Sửa dán\n\nsha256: {sha}", "assets": [{"name": "CrawlTool.exe", "browser_download_url": "u-120", "size": 9}]},
         {"tag_name": "app-v1.10.0", "body": "không có file exe", "assets": []},  # thiếu file: bỏ
-        {"tag_name": "v9.9.9", "assets": [{"name": "CrawlTool.exe", "url": "u-khac"}]},  # không phải tag app: bỏ
-        {"tag_name": "app-v1.1.5", "assets": [{"name": "CrawlTool.exe", "url": "u-115"}]},
+        {"tag_name": "v9.9.9", "assets": [{"name": "CrawlTool.exe", "browser_download_url": "u-khac"}]},  # không phải tag app: bỏ
+        {"tag_name": "app-v1.1.5", "assets": [{"name": "CrawlTool.exe", "browser_download_url": "u-115"}]},
     ]
     old_get = ct.github_get
-    ct.github_get = lambda url, token: json.dumps(releases).encode()
+    ct.github_get = lambda url, timeout=120: json.dumps(releases).encode()
     try:
-        latest = ct.latest_app_release("t")
+        latest = ct.latest_app_release()
     finally:
         ct.github_get = old_get
     assert latest["version"] == "1.2.0" and latest["asset_url"] == "u-120" and latest["sha256"] == sha
@@ -547,6 +547,34 @@ def test_thumb_cache():
     assert ct.image_mime(b"<html>") == ""
 
 
+def test_bundled_base_installs_once():
+    old = ct.APP_HOME, ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.save_settings, ct.bundled_base, ct.latest_app_release
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        zip_path = home / "base.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("MediaCrawler/main.py", "print('base')")
+        ct.APP_HOME, ct.BASE_DIR, ct.BROWSER_DATA_DIR = home, home / "base", home / "browser_data"
+        ct.save_settings = lambda settings: None
+        ct.bundled_base = lambda: (zip_path, "c0ffee1234567890")
+        ct.latest_app_release = lambda: {}
+        try:
+            api = ct.Api()
+            api._settings = {"token": "cu"}
+            api.init()
+            assert "token" not in api._settings  # token GitHub bản cũ bị xóa khỏi máy
+            syncs = []
+            api._run_logged = lambda cmd, cwd, *a, **k: syncs.append(cwd) or 0
+            api._update_worker()
+            base = home / "base-c0ffee123456"
+            assert (base / "main.py").read_text() == "print('base')" and syncs == [base]
+            assert api._settings["base_sha"] == "c0ffee1234567890" and ct.current_base(api._settings) == base
+            api._update_worker()  # mở lại app: đã đúng bản, không cài lại
+            assert syncs == [base] and api._state == "idle"
+        finally:
+            ct.APP_HOME, ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.save_settings, ct.bundled_base, ct.latest_app_release = old
+
+
 def test_token_roundtrip():
     blob = ct.encrypt_token("github_pat_test")
     assert "github_pat_test" not in blob
@@ -619,5 +647,6 @@ if __name__ == "__main__":
     test_normalize_and_library()
     test_thumb_cache()
     test_token_roundtrip()
+    test_bundled_base_installs_once()
     test_base_update_keeps_login_profiles()
     print("OK")

@@ -29,10 +29,9 @@ from ctypes import wintypes
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.1.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
-APP_RELEASE_PREFIX = "app-v"  # bản app đăng ở Releases của repo base, tag dạng app-v1.2.3
-BASE_REPO = "MrNMDien/MediaCrawler"
-BASE_BRANCH = "main"
+APP_VERSION = "1.2.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
+APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
 APP_HOME = Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP_NAME
 BASE_DIR = APP_HOME / "base"  # chỗ cài base của bản app cũ; bản mới cài vào base-<sha>
@@ -121,16 +120,13 @@ def save_settings(settings: dict) -> None:
     SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# ---------- Cập nhật base code từ GitHub ----------
+# ---------- Cập nhật app từ GitHub Releases (repo public) ----------
 
-def github_get(url: str, token: str) -> bytes:
+def github_get(url: str, timeout: int = 120) -> bytes:
     req = urllib.request.Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {token}",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": APP_NAME,
+        "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": APP_NAME,
     })
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 
@@ -140,9 +136,9 @@ def parse_version(text: str) -> tuple:
     return tuple(int(x) for x in match.groups()) if match else ()
 
 
-def latest_app_release(token: str) -> dict:
+def latest_app_release() -> dict:
     """Bản app mới nhất trên GitHub Releases (tag app-v*, có file CrawlTool.exe). Không có thì {}."""
-    releases = json.loads(github_get(f"https://api.github.com/repos/{BASE_REPO}/releases?per_page=30", token))
+    releases = json.loads(github_get(f"https://api.github.com/repos/{APP_REPO}/releases?per_page=30"))
     best = {}
     for rel in releases if isinstance(releases, list) else []:
         tag = str(rel.get("tag_name") or "")
@@ -155,28 +151,14 @@ def latest_app_release(token: str) -> dict:
             sha = re.search(r"sha256:\s*([0-9a-fA-F]{64})", body)
             notes = re.sub(r"sha256:\s*[0-9a-fA-F]{64}", "", body).strip()
             best = {"version_tuple": version, "version": ".".join(map(str, version)), "notes": notes[:500],
-                    "asset_url": asset["url"], "size": asset.get("size", 0), "sha256": sha.group(1).lower() if sha else ""}
+                    "asset_url": asset["browser_download_url"], "size": asset.get("size", 0), "sha256": sha.group(1).lower() if sha else ""}
     return best
 
 
-def github_download_asset(url: str, token: str) -> bytes:
-    """Tải file đính kèm release. GitHub chuyển hướng sang máy chủ lưu file, chỗ đó phải gọi KHÔNG kèm
-    token (gửi kèm sẽ bị từ chối, và cũng không nên đưa token cho máy chủ khác)."""
-    req = urllib.request.Request(url, headers={
-        "Accept": "application/octet-stream", "Authorization": f"Bearer {token}",
-        "X-GitHub-Api-Version": "2022-11-28", "User-Agent": APP_NAME,
-    })
-    try:
-        with urllib.request.build_opener(_NoRedirect).open(req, timeout=60) as resp:
-            return resp.read()
-    except urllib.error.HTTPError as e:
-        if e.code not in (301, 302, 303, 307, 308):
-            raise
-        location = e.headers.get("Location", "")
-    if not location.startswith("https://"):
-        raise RuntimeError("GitHub trả về địa chỉ tải không hợp lệ")
-    with urllib.request.urlopen(urllib.request.Request(location, headers={"User-Agent": APP_NAME}), timeout=600) as resp:
-        return resp.read()
+def github_download_asset(url: str) -> bytes:
+    if not url.startswith("https://github.com/"):
+        raise RuntimeError("Địa chỉ tải bản cập nhật không hợp lệ")
+    return github_get(url, timeout=600)
 
 
 def apply_app_update(data: bytes, exe: Path, sha256: str) -> None:
@@ -204,19 +186,23 @@ def remove_old_exe(exe: Path) -> None:
         pass  # bản cũ còn đang thoát, lần sau xóa
 
 
-def latest_sha(token: str) -> str:
-    data = github_get(f"https://api.github.com/repos/{BASE_REPO}/commits/{BASE_BRANCH}", token)
-    return json.loads(data)["sha"]
+def bundled_base():
+    """Base code gói sẵn trong exe (build.ps1 tạo base.zip + base.sha). Trả về (đường dẫn zip, sha) hoặc None."""
+    root = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
+    zip_path, sha_path = root / "base.zip", root / "base.sha"
+    if not (zip_path.is_file() and sha_path.is_file()):
+        return None
+    return zip_path, sha_path.read_text(encoding="utf-8").strip()
 
 
 def extract_zipball(zip_bytes: bytes, dest: Path) -> None:
-    """Giải nén zipball GitHub (có 1 thư mục gốc kiểu owner-repo-sha/) vào dest."""
+    """Giải nén zip có 1 thư mục gốc (vd. MediaCrawler/) vào dest."""
     with tempfile.TemporaryDirectory(dir=APP_HOME) as tmp:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             zf.extractall(tmp)
         roots = [p for p in Path(tmp).iterdir() if p.is_dir()]
         if len(roots) != 1:
-            raise RuntimeError("File zip từ GitHub không đúng định dạng")
+            raise RuntimeError("File zip base code không đúng định dạng")
         shutil.move(str(roots[0]), str(dest))
 
 
@@ -998,20 +984,10 @@ class Api:
             self._state = "idle"
             self._lib_rev += 1  # giao diện tải lại trạng thái phiên
 
-    def _token(self) -> str:
-        blob = self._settings.get("token")
-        if not blob:
-            return ""
-        try:
-            return decrypt_token(blob)
-        except OSError:
-            self._write("[LỖI] Không giải mã được token đã lưu, hãy nhập lại trong tab Cài đặt.")
-            return ""
-
-    def _check_app_update(self, token: str) -> None:
+    def _check_app_update(self) -> None:
         self._app_checked = time.time()
         try:
-            latest = latest_app_release(token)
+            latest = latest_app_release()
         except (urllib.error.URLError, OSError, ValueError) as e:
             self._write(f"[CẢNH BÁO] Không kiểm tra được bản app mới: {e}")
             return
@@ -1022,12 +998,12 @@ class Api:
         else:
             self._app_update = {}
 
-    def _app_update_worker(self, token: str) -> None:
+    def _app_update_worker(self) -> None:
         info = self._app_update
         try:
             exe = Path(sys.executable)
             self._write(f"Đang tải CrawlTool v{info['version']}...")
-            data = github_download_asset(info["asset_url"], token)
+            data = github_download_asset(info["asset_url"])
             apply_app_update(data, exe, info["sha256"])
             self._write("Đã cài bản mới, đang khởi động lại...")
             subprocess.Popen([str(exe)], cwd=str(exe.parent))
@@ -1037,33 +1013,33 @@ class Api:
             self._write(f"[LỖI] Cập nhật app thất bại: {e}")
             self._state = "idle"
 
-    def _update_worker(self, token: str) -> None:
-        self._check_app_update(token)
+    def _update_worker(self) -> None:
+        """Mở app: kiểm tra bản app mới, và cài base code gói trong exe nếu máy chưa có đúng bản đó."""
+        self._check_app_update()
         try:
-            self._write("Đang kiểm tra bản mới của base code...")
             for message in migrate_browser_data():
                 self._write(message)
-            sha = latest_sha(token)
+            bundle = bundled_base()
             current = current_base(self._settings)
+            if not bundle:
+                if not current:
+                    self._write("[LỖI] Bản app này không kèm base code. Tải lại CrawlTool.exe từ trang phát hành.")
+                return
+            zip_path, sha = bundle
             if sha == self._settings.get("base_sha") and current:
-                self._write(f"Base code đã là bản mới nhất ({sha[:7]}).")
                 remove_old_bases(keep=current)
                 return
-            self._write(f"Đang tải base code {sha[:7]}...")
-            zip_bytes = github_get(f"https://api.github.com/repos/{BASE_REPO}/zipball/{sha}", token)
+            self._write(f"Đang cài base code {sha[:7]}...")
             new_dir = base_dir_for(sha)
             shutil.rmtree(new_dir, ignore_errors=True)
-            extract_zipball(zip_bytes, new_dir)
+            extract_zipball(zip_path.read_bytes(), new_dir)
             self._write("Đang cài thư viện (lần đầu sẽ lâu vì phải tải Python và thư viện)...")
             if self._run_logged([uv_path(), "sync"], new_dir) != 0:
                 raise RuntimeError("uv sync thất bại, xem log ở trên")
             self._settings["base_dir"], self._settings["base_sha"] = str(new_dir), sha
             save_settings(self._settings)
             remove_old_bases(keep=new_dir)
-            self._write(f"Đã cập nhật base code lên {sha[:7]}.")
-        except urllib.error.HTTPError as e:
-            hint = " (token sai, hết hạn hoặc không có quyền vào repo: đổi token trong tab Cài đặt)" if e.code in (401, 403, 404) else ""
-            self._write(f"[LỖI] GitHub trả về {e.code}{hint}")
+            self._write(f"Đã cài base code {sha[:7]}.")
         except Exception as e:  # noqa: BLE001 - lỗi nào cũng phải hiện cho người dùng thấy
             self._write(f"[LỖI] Cập nhật thất bại: {e}")
         finally:
@@ -1172,9 +1148,7 @@ class Api:
         while True:
             time.sleep(60)
             if time.time() - self._app_checked > 6 * 3600:  # app mở lâu: 6 giờ hỏi bản app mới 1 lần
-                token = self._token()
-                if token:
-                    self._check_app_update(token)
+                self._check_app_update()
             settings = self._follow_settings()
             due = time.time() - settings["last_check"] >= settings["hours"] * 3600
             if settings["auto"] and due and self._state == "idle" and load_follows(self._data_dir()):
@@ -1350,6 +1324,8 @@ class Api:
 
     # --- gọi từ giao diện ---
     def init(self) -> dict:
+        if self._settings.pop("token", None):  # token GitHub của bản cũ (repo riêng tư): không còn dùng, xóa khỏi máy
+            save_settings(self._settings)
         saved = dict(self._settings.get("form", {}))
         old_login = saved.pop("login", None)
         if "login" not in self._settings and old_login in UI_LOGIN_TYPES:
@@ -1370,8 +1346,8 @@ class Api:
         if not shutil.which("node"):
             warnings.append("Không thấy Node.js. Douyin và Zhihu cần Node.js để tính chữ ký: https://nodejs.org")
         return {
-            "form": form, "data_dir": self._data_dir(), "has_token": bool(self._settings.get("token")),
-            "warnings": warnings, "repo": BASE_REPO, "login": self.get_login(), "gemini": self.get_gemini(),
+            "form": form, "data_dir": self._data_dir(),
+            "warnings": warnings, "repo": APP_REPO, "login": self.get_login(), "gemini": self.get_gemini(),
             "app_version": APP_VERSION, "can_self_update": bool(getattr(sys, "frozen", False)),
             "ai_topic": clean_topic(self._settings.get("ai_topic")),
         }
@@ -1503,22 +1479,11 @@ class Api:
             "app_update": {k: self._app_update[k] for k in ("version", "notes")} if self._app_update else None,
         }
 
-    def set_token(self, token) -> dict:
-        token = str(token or "").strip()
-        if not token:
-            return {"error": "Chưa nhập token"}
-        self._settings["token"] = encrypt_token(token)
-        save_settings(self._settings)
-        return self.check_update()
-
     def check_update(self) -> dict:
         if self._state != "idle":
             return {"error": "App đang bận, đợi xong rồi thử lại."}
-        token = self._token()
-        if not token:
-            return {"error": "need_token"}
         self._state = "updating"
-        threading.Thread(target=self._update_worker, args=(token,), daemon=True).start()
+        threading.Thread(target=self._update_worker, daemon=True).start()
         return {"ok": True}
 
     def start(self, values) -> dict:
@@ -1608,11 +1573,8 @@ class Api:
             return {"error": "Chỉ tự cập nhật được khi chạy từ file CrawlTool.exe"}
         if self._state != "idle":
             return {"error": "App đang bận, đợi chạy xong rồi cập nhật."}
-        token = self._token()
-        if not token:
-            return {"error": "need_token"}
         self._state = "app_updating"
-        threading.Thread(target=self._app_update_worker, args=(token,), daemon=True).start()
+        threading.Thread(target=self._app_update_worker, daemon=True).start()
         return {"ok": True}
 
     def copy(self, text) -> None:
@@ -1658,7 +1620,12 @@ class Api:
 
 def ui_html() -> str:
     root = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
-    return (root / "ui.html").read_text(encoding="utf-8")
+    html = (root / "ui.html").read_text(encoding="utf-8")
+    logo = root / "logo_64.png"  # build.ps1 tạo từ logo.png
+    if logo.is_file():
+        img = f'<img src="data:image/png;base64,{base64.b64encode(logo.read_bytes()).decode()}" alt="">'
+        html = re.sub(r'<span class="logo">.*?</span>', f'<span class="logo img">{img}</span>', html, count=1)
+    return html
 
 
 def main() -> None:

@@ -45,6 +45,8 @@
     background: linear-gradient(135deg, #5a55f2, #b44cf0);
   }
   .logo svg { width: 15px; height: 15px; }
+  .logo.img { background: none; }
+  .logo img { width: 28px; height: 28px; border-radius: 8px; }
   nav { display: flex; gap: 2px; margin-left: 18px; height: 100%; }
   nav button {
     border: 0; background: none; padding: 0 14px; cursor: pointer; color: var(--muted); font-weight: 600;
@@ -445,36 +447,16 @@
         <div class="acts"><button class="btn sm" id="btn-open-dir">Mở</button><button class="btn sm" id="btn-choose-dir">Đổi thư mục</button></div>
       </div>
       <div class="card setting">
-        <div class="info"><h3>Base code</h3><p>App <code id="app-ver">—</code> · base <code id="base-ver">—</code> · tự cập nhật từ <code id="repo">—</code> mỗi lần mở app</p></div>
+        <div class="info"><h3>Base code</h3><p>App <code id="app-ver">—</code> · base <code id="base-ver">—</code> · base đi kèm app, cập nhật cùng app từ <code id="repo">—</code></p></div>
         <div class="acts"><button class="btn sm" id="btn-update">Kiểm tra cập nhật</button></div>
       </div>
-      <div class="card setting">
-        <div class="info"><h3>GitHub token</h3><p>Token chỉ đọc để tải base code từ repo riêng tư. Lưu mã hóa trên máy này.</p></div>
-        <div class="acts"><button class="btn sm" id="btn-token">Đổi token</button></div>
-      </div>
       <div class="card setting danger">
-        <div class="info"><h3>Gỡ cài đặt</h3><p>Xóa app, base code và token. Thư mục kết quả (kể cả thư viện) được giữ lại.</p></div>
+        <div class="info"><h3>Gỡ cài đặt</h3><p>Xóa app, base code, phiên đăng nhập và các key đã lưu. Thư mục kết quả (kể cả thư viện) được giữ lại.</p></div>
         <div class="acts"><button class="btn sm danger" id="btn-uninstall">Gỡ cài đặt</button></div>
       </div>
     </div>
   </section>
 </main>
-
-<!-- Hộp thoại nhập token -->
-<div class="overlay" id="token-modal">
-  <div class="card modal">
-    <h2>Nhập GitHub token</h2>
-    <p>Cần để tải base code từ repo riêng tư <code id="repo-2"></code>.</p>
-    <ol>
-      <li>GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token</li>
-      <li>Repository access: chỉ chọn repo <b>MediaCrawler</b></li>
-      <li>Permissions: <b>Contents → Read-only</b></li>
-    </ol>
-    <input type="password" id="token-input" data-paste placeholder="github_pat_..." autocomplete="off">
-    <div class="error" id="token-error"></div>
-    <div class="acts"><button class="btn" id="token-cancel">Để sau</button><button class="btn primary" id="token-save">Lưu và tải base code</button></div>
-  </div>
-</div>
 
 <!-- Hộp thoại gợi ý từ khóa bằng Gemini -->
 <div class="overlay" id="ai-modal">
@@ -1306,26 +1288,10 @@ $("ai-add").onclick = () => {
 };
 
 // ---------- Cài đặt ----------
-function openTokenModal() {
-  $("token-error").textContent = "";
-  $("token-input").value = "";
-  $("token-modal").classList.add("open");
-  setTimeout(() => $("token-input").focus(), 50);
-}
-$("token-cancel").onclick = () => $("token-modal").classList.remove("open");
-$("token-save").onclick = async () => {
-  const res = await api().set_token($("token-input").value);
-  if (res.error) { $("token-error").textContent = res.error; return; }
-  $("token-input").value = "";
-  $("token-modal").classList.remove("open");
-  toast("Đã lưu token, đang tải base code...");
-};
-$("token-input").onkeydown = (e) => e.key === "Enter" && $("token-save").click();
-$("btn-token").onclick = openTokenModal;
 $("btn-update").onclick = async () => {
   const res = await api().check_update();
-  if (res.error === "need_token") openTokenModal();
-  else if (res.error) toast(res.error, true);
+  if (res.error) toast(res.error, true);
+  else toast("Đang kiểm tra bản mới...");
 };
 $("btn-open-dir").onclick = () => api().open_data_dir();
 $("btn-choose-dir").onclick = async () => {
@@ -1333,7 +1299,7 @@ $("btn-choose-dir").onclick = async () => {
   if (dir) { $("data-dir").textContent = dir; toast("Đã đổi thư mục kết quả"); }
 };
 $("btn-uninstall").onclick = async () => {
-  if (await confirmBox("Gỡ CrawlTool?", "Xóa app, base code và token đã lưu. Thư mục kết quả và thư viện được giữ lại.")) api().uninstall_app();
+  if (await confirmBox("Gỡ CrawlTool?", "Xóa app, base code, phiên đăng nhập và các key đã lưu. Thư mục kết quả và thư viện được giữ lại.")) api().uninstall_app();
 };
 
 // ---------- Menu chuột phải ----------
@@ -1421,7 +1387,6 @@ document.addEventListener("keydown", async (e) => {
 $("upd-later").onclick = () => { state.dismissedUpdate = $("upd-ver").textContent.slice(1); $("update-bar").hidden = true; };
 $("upd-now").onclick = async () => {
   const res = await api().update_app();
-  if (res.error === "need_token") return openTokenModal();
   if (res.error) return toast(res.error, true);
   $("upd-now").disabled = true;
   $("upd-now").textContent = "Đang tải bản mới...";
@@ -1431,7 +1396,6 @@ $("upd-now").onclick = async () => {
 window.addEventListener("pywebviewready", async () => {
   const info = await api().init();
   $("repo").textContent = info.repo;
-  $("repo-2").textContent = info.repo;
   $("data-dir").textContent = info.data_dir;
   state.appVersion = info.app_version;
   $("app-ver").textContent = "v" + info.app_version;
@@ -1441,8 +1405,7 @@ window.addEventListener("pywebviewready", async () => {
   renderGemini(info.gemini);
   state.aiTopic = info.ai_topic;
   appendLog(info.warnings.map((w) => "[CẢNH BÁO] " + w));
-  if (info.has_token) api().check_update();
-  else openTokenModal();
+  api().check_update();
   pollLoop();
 });
 </script>

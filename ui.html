@@ -129,6 +129,11 @@
   .mv-filters .seg button small { font-weight: 500; color: var(--faint); margin-left: 4px; }
   .mv-check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); cursor: pointer; }
   .mv-check input { width: auto; margin: 0; }
+  .mv-filters select { width: auto; height: 32px; }
+  .mv-time.none { color: var(--faint); }
+  .mv-plat .ch { color: var(--muted); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .chip.soft { background: var(--accent-soft); color: var(--accent); }
   .mv-board { flex: 1; overflow-y: auto; padding: 0 16px 24px; }
   .mv-day { display: grid; grid-template-columns: 92px 1fr; border-top: 1px solid var(--border); }
   .mv-day:first-child { border-top: 0; }
@@ -441,6 +446,10 @@
       </div>
       <div class="mv-filters" id="mv-filters">
         <div class="seg" id="mv-chips"></div>
+        <select id="mv-type" title="Loại phim">
+          <option value="all">Phim lẻ + phim bộ</option><option value="movie">Chỉ phim lẻ</option><option value="tv">Chỉ phim bộ Hàn</option>
+        </select>
+        <label class="mv-check"><input type="checkbox" id="mv-ko-only"> Chỉ phim Hàn Quốc</label>
         <label class="mv-check"><input type="checkbox" id="mv-hide-rent" checked> Ẩn phim chỉ thuê/mua</label>
         <label class="mv-check"><input type="checkbox" id="mv-vn-only"> Chỉ nền tảng có ở VN</label>
       </div>
@@ -1316,8 +1325,10 @@ $("btn-gem-clear").onclick = async () => { renderGemini(await api().set_gemini(n
 
 // ---------- Lịch phim (TMDB) ----------
 const STREAM_COLORS = { Netflix: "#e50914", "HBO Max": "#7b4dff", "Prime Video": "#1a98ff", "Apple TV": "#8e8e93",
-  "Disney+": "#113ccf", Hulu: "#1ce783", Peacock: "#f5b400", "Paramount+": "#0064ff" };
-const MOVIE_KINDS = { original: ["Phim gốc", "chip new"], premiere: ["Từ rạp", "chip ok"], rent: ["Thuê/mua", "chip"] };
+  "Disney+": "#113ccf", Hulu: "#1ce783", Peacock: "#f5b400", "Paramount+": "#0064ff",
+  TVING: "#ff153c", "Coupang Play": "#2c8bf5", Wavve: "#1f4bff" };
+const MOVIE_KINDS = { original: ["Phim gốc", "chip new"], premiere: ["Từ rạp", "chip ok"], rent: ["Thuê/mua", "chip"],
+  theater: ["Chiếu rạp HQ", "chip warn"], series: ["Phim bộ", "chip soft"] };
 const WEEKDAYS = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
 const movies = { data: null, off: new Set(), loading: false };
 
@@ -1336,7 +1347,7 @@ async function loadMovies(refresh) {
   }
 }
 $("mv-reload").onclick = () => loadMovies(true);
-$("mv-hide-rent").onchange = $("mv-vn-only").onchange = () => renderMovies();
+$("mv-hide-rent").onchange = $("mv-vn-only").onchange = $("mv-ko-only").onchange = $("mv-type").onchange = () => renderMovies();
 
 function renderMovies() {
   const d = movies.data, board = $("mv-board");
@@ -1360,10 +1371,14 @@ function renderMovies() {
     return b;
   }));
   const hideRent = $("mv-hide-rent").checked, vnOnly = $("mv-vn-only").checked;
-  const rows = d.items.filter((m) => m.platforms.length
-    ? m.platforms.some((p) => !movies.off.has(p) && (!vnOnly || d.streamers[p]))
-    : !hideRent && !vnOnly);
-  $("mv-status").textContent = `${rows.length} phim · giờ Việt Nam · cập nhật ${d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString("vi-VN") : "—"}`;
+  const koOnly = $("mv-ko-only").checked, type = $("mv-type").value;
+  const rows = d.items.filter((m) => {
+    if (type !== "all" && m.type !== type) return false;
+    if (koOnly && m.lang !== "ko") return false;
+    if (m.platforms.length) return m.platforms.some((p) => !movies.off.has(p) && (!vnOnly || d.streamers[p]));
+    return !vnOnly && !(hideRent && m.kind === "rent");  // chiếu rạp HQ, phim bộ trên kênh TV: không thuộc nền tảng nào
+  });
+  $("mv-status").textContent = `${rows.length} phim · giờ Việt Nam (— là chưa rõ giờ) · cập nhật ${d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString("vi-VN") : "—"}`;
 
   const today = new Date().toLocaleDateString("en-CA");  // YYYY-MM-DD theo giờ máy
   const byDay = new Map();
@@ -1393,14 +1408,17 @@ function renderMovies() {
         dot.style.background = STREAM_COLORS[p] || "var(--faint)";
         plats.append(dot, p);
       }
-      const [kindText, kindCls] = MOVIE_KINDS[m.kind] || MOVIE_KINDS.rent;
+      if (m.channel) plats.append(el("span", "ch", m.channel));  // kênh TV Hàn: tvN, JTBC...
+      if (m.kind === "theater") plats.append(el("span", "ch", "Rạp Hàn Quốc"));
+      let [kindText, kindCls] = MOVIE_KINDS[m.kind] || MOVIE_KINDS.rent;
+      if (m.episodes) kindText += ` · ${m.episodes} tập`;
       const trailer = el("button", "btn sm", "▶ Trailer");
       trailer.onclick = () => api().open_url(m.trailer);
       const info = el("button", "btn sm icon");
       info.innerHTML = ICON.open;
       info.title = "Xem trên TMDB";
       info.onclick = () => api().open_url(m.url);
-      row.append(el("span", "mv-time", m.time), title, plats, el("span", kindCls, kindText), trailer, info);
+      row.append(el("span", m.time ? "mv-time" : "mv-time none", m.time || "—"), title, plats, el("span", kindCls, kindText), trailer, info);
       return row;
     }));
     day.append(dateBox, list);

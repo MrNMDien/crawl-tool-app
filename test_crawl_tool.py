@@ -651,15 +651,23 @@ def test_movie_calendar():
     assert ct.streamer_of("Paramount+ Amazon Channel") == "Paramount+"
     assert ct.streamer_of("Max") == "HBO Max" and ct.streamer_of("Maxdome") is None and ct.streamer_of(None) is None
 
-    def movie(mid, us_dates, note="", flatrate=(), videos=()):
+    def movie(mid, us_dates, note="", flatrate=(), videos=(), lang="en", kr_dates=(), kr_flatrate=()):
         return {
-            "id": mid, "title": f"Phim {mid}", "release_date": "2026-01-01", "popularity": mid,
-            "release_dates": {"results": [{"iso_3166_1": "GB", "release_dates": [{"type": 4, "release_date": "2026-11-05"}]},
-                                          {"iso_3166_1": "US", "release_dates": [
-                                              {"type": t, "release_date": d, "note": note} for t, d in us_dates]}]},
-            "watch/providers": {"results": {"US": {"flatrate": [{"provider_name": p} for p in flatrate]}}},
+            "id": mid, "title": f"Phim {mid}", "release_date": "2026-01-01", "popularity": mid, "original_language": lang,
+            "release_dates": {"results": [
+                {"iso_3166_1": "GB", "release_dates": [{"type": 4, "release_date": "2026-11-05"}]},
+                {"iso_3166_1": "US", "release_dates": [{"type": t, "release_date": d, "note": note} for t, d in us_dates]},
+                {"iso_3166_1": "KR", "release_dates": [{"type": t, "release_date": d, "note": n} for t, d, n in kr_dates]}]},
+            "watch/providers": {"results": {"US": {"flatrate": [{"provider_name": p} for p in flatrate]},
+                                            "KR": {"flatrate": [{"provider_name": p} for p in kr_flatrate]}}},
             "videos": {"results": list(videos)},
         }
+
+    def show(sid, first_air, networks, episodes=16, kr_flatrate=()):
+        return {"id": sid, "name": f"Drama {sid}", "first_air_date": first_air, "popularity": sid, "original_language": "ko",
+                "networks": [{"name": n} for n in networks], "number_of_episodes": episodes,
+                "watch/providers": {"results": {"KR": {"flatrate": [{"provider_name": p} for p in kr_flatrate]}}},
+                "videos": {"results": [{"site": "YouTube", "type": "Teaser", "key": f"teaser{sid}x"}]}}
 
     movies = {
         1: movie(1, [(4, "2026-11-09T00:00:00.000Z")], note="Netflix",
@@ -670,6 +678,14 @@ def test_movie_calendar():
         3: movie(3, [(4, "2026-11-12")]),  # chỉ thuê/mua
         4: movie(4, [(4, "2027-03-01")], note="Netflix"),  # ngoài khoảng
         5: movie(5, [(4, "2026-11-25")], flatrate=["Hulu"]),  # lỗi khi lấy chi tiết
+        6: movie(6, [], lang="ko", kr_dates=[(3, "2026-11-12", "")]),  # phim Hàn chỉ chiếu rạp ở Hàn
+        7: movie(7, [(4, "2026-11-06")], note="Netflix", lang="ko", kr_dates=[(4, "2026-11-06", "Netflix")]),  # ra toàn cầu
+        8: movie(8, [], lang="ko", kr_dates=[(4, "2026-11-15", "")], kr_flatrate=["TVING"]),  # chỉ lên TVING
+    }
+    shows = {
+        101: show(101, "2026-11-14", ["tvN"], kr_flatrate=["TVING", "Netflix"]),
+        102: show(102, "2026-11-20", ["Netflix"], episodes=8),
+        103: show(103, "2027-02-01", ["JTBC"]),  # ngoài khoảng
     }
     calls = []
 
@@ -677,25 +693,41 @@ def test_movie_calendar():
         calls.append((path, params))
         assert key == "k"
         if path == "/discover/movie":
-            assert params["region"] == "US" and params["with_release_type"] == 4
             assert (params["release_date.gte"], params["release_date.lte"]) == ("2026-10-29", "2027-01-04")
-            return {"results": [{"id": i} for i in (4, 3, 2, 1, 1, 5)], "total_pages": 1}
-        mid = int(path.rsplit("/", 1)[1])
-        if mid == 5:
+            if params["region"] == "US":
+                assert params["with_release_type"] == 4
+                return {"results": [{"id": i} for i in (4, 3, 2, 1, 1, 5, 7)], "total_pages": 1}
+            assert (params["region"], params["with_release_type"], params["with_original_language"]) == ("KR", "3|4", "ko")
+            return {"results": [{"id": i} for i in (6, 7, 8)], "total_pages": 1}
+        if path == "/discover/tv":
+            assert params["with_original_language"] == "ko" and params["first_air_date.gte"] == "2026-10-29"
+            return {"results": [{"id": i} for i in shows], "total_pages": 1}
+        kind, mid = path.strip("/").split("/")
+        if mid == "5":
             raise ct.urllib.error.URLError("timeout")
-        return movies[mid]
+        return (shows if kind == "tv" else movies)[int(mid)]
 
     items = ct.fetch_movie_calendar("k", date(2026, 11, 5), get=fake_get)
-    assert [c[0] for c in calls].count("/discover/movie") == 1  # total_pages = 1: không gọi trang 2
-    assert [c[0] for c in calls].count("/movie/1") == 1  # id trùng chỉ lấy 1 lần
-    assert [i["id"] for i in items] == [1, 3, 2]
-    netflix, rent, hbo = items
-    assert (netflix["date"], netflix["time"], netflix["platforms"], netflix["kind"], netflix["vn"]) == \
-        ("2026-11-09", "15:00", ["Netflix"], "original", True)
+    assert [c[0] for c in calls].count("/discover/movie") == 2  # total_pages = 1: không gọi trang 2
+    assert [c[0] for c in calls].count("/movie/7") == 1  # id trùng (cả lịch Mỹ lẫn Hàn) chỉ lấy 1 lần
+    by_id = {i["id"]: i for i in items}
+    # cùng ngày: có giờ trước, chưa rõ giờ sau, rồi phổ biến hơn trước; phim 7 chỉ còn bản lịch Mỹ
+    assert [i["id"] for i in items] == [7, 1, 6, 3, 101, 8, 102, 2]
+    netflix, rent, hbo = by_id[1], by_id[3], by_id[2]
+    assert (netflix["date"], netflix["time"], netflix["platforms"], netflix["kind"], netflix["vn"], netflix["type"]) == \
+        ("2026-11-09", "15:00", ["Netflix"], "original", True, "movie")
     assert netflix["trailer"] == "https://www.youtube.com/watch?v=official001"
     assert (hbo["platforms"], hbo["kind"]) == (["HBO Max"], "premiere")
-    assert (rent["platforms"], rent["kind"], rent["vn"]) == ([], "rent", False)
+    assert (rent["platforms"], rent["kind"], rent["vn"], rent["time"]) == ([], "rent", False, "")
     assert rent["trailer"].startswith("https://www.youtube.com/results?search_query=Phim%203")
+    assert (by_id[7]["region"], by_id[7]["lang"], by_id[7]["time"]) == ("US", "ko", "15:00")
+    assert (by_id[6]["kind"], by_id[6]["region"], by_id[6]["time"], by_id[6]["platforms"]) == ("theater", "KR", "", [])
+    assert (by_id[8]["platforms"], by_id[8]["kind"], by_id[8]["time"], by_id[8]["vn"]) == (["TVING"], "original", "", False)
+    tvn, nfx = by_id[101], by_id[102]
+    assert (tvn["type"], tvn["kind"], tvn["platforms"], tvn["channel"], tvn["episodes"], tvn["time"]) == \
+        ("tv", "series", ["TVING", "Netflix"], "tvN", 16, "")
+    assert tvn["url"] == "https://www.themoviedb.org/tv/101" and tvn["trailer"].endswith("teaser101x")
+    assert (nfx["platforms"], nfx["channel"], nfx["time"], nfx["vn"], nfx["title"]) == (["Netflix"], "", "15:00", True, "Drama 102")
 
     # Api: chưa có key thì không gọi mạng; có key thì cache, quá 6 giờ mới lấy lại
     with tempfile.TemporaryDirectory() as tmp:

@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.4.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.5.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -81,10 +81,12 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 TMDB_API = "https://api.themoviedb.org/3"
 MOVIES_FILE = APP_HOME / "movies.json"  # cache lịch phim, lấy lại khi cũ hơn MOVIES_MAX_AGE
 MOVIES_MAX_AGE = 6 * 3600
-MOVIE_DAYS_BACK, MOVIE_DAYS_AHEAD, MOVIE_PAGES = 7, 60, 5  # 5 trang discover = 100 phim phổ biến nhất
-# Nền tảng streaming ở Mỹ: tên hiển thị -> tên TMDB/JustWatch dùng (khớp đầu chuỗi, vì có cả
+MOVIES_CACHE_VERSION = 2  # đổi khi dòng lịch phim có thêm trường: cache cũ bị bỏ, lấy lại
+MOVIE_DAYS_BACK, MOVIE_DAYS_AHEAD = 7, 60
+MOVIE_PAGES, KR_PAGES = 5, 2  # mỗi trang discover 20 phim, xếp theo độ phổ biến
+# Nền tảng streaming (Mỹ + Hàn): tên hiển thị -> tên TMDB/JustWatch dùng (khớp đầu chuỗi, vì có cả
 # "Netflix Standard with Ads", "Paramount+ Amazon Channel"...). vn: có chính thức ở Việt Nam.
-# drop: giờ lên sóng thường lệ, "pt" = 00:00 giờ Thái Bình Dương, "gmt" = 00:00 GMT.
+# drop: giờ lên sóng thường lệ, "pt" = 00:00 giờ Thái Bình Dương, "gmt" = 00:00 GMT, None = không rõ giờ.
 STREAMERS = {
     "Netflix": {"names": ("netflix",), "vn": True, "drop": "pt"},
     "HBO Max": {"names": ("hbo max", "max"), "vn": True, "drop": "pt"},
@@ -94,6 +96,9 @@ STREAMERS = {
     "Hulu": {"names": ("hulu",), "vn": False, "drop": "pt"},
     "Peacock": {"names": ("peacock",), "vn": False, "drop": "pt"},
     "Paramount+": {"names": ("paramount plus", "paramount+"), "vn": False, "drop": "pt"},
+    "TVING": {"names": ("tving",), "vn": False, "drop": None},
+    "Coupang Play": {"names": ("coupang play",), "vn": False, "drop": None},
+    "Wavve": {"names": ("wavve",), "vn": False, "drop": None},
 }
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
@@ -488,41 +493,80 @@ def pacific_offset(day: date) -> int:
 
 
 def vn_release(day: str, platform) -> tuple:
-    """Ngày phát hành ở Mỹ ("2026-11-06...") -> (ngày, giờ) theo giờ Việt Nam (GMT+7)."""
+    """Ngày phát hành ("2026-11-06...") -> (ngày, giờ) theo giờ Việt Nam (GMT+7).
+    Nền tảng không rõ giờ lên sóng (rạp, TVING, kênh TV...) thì giữ ngày, giờ để trống."""
     d = date.fromisoformat(day[:10])
-    offset = 0 if STREAMERS.get(platform, {}).get("drop") == "gmt" else pacific_offset(d)
+    drop = STREAMERS.get(platform, {}).get("drop")
+    if not drop:
+        return d.isoformat(), ""
+    offset = 0 if drop == "gmt" else pacific_offset(d)
     vn = datetime(d.year, d.month, d.day) + timedelta(hours=7 - offset)
     return vn.date().isoformat(), vn.strftime("%H:%M")
 
 
-def parse_tmdb_movie(m: dict, start: str, end: str):
-    """Chi tiết phim TMDB (kèm release_dates, watch/providers, videos) -> 1 dòng lịch phim;
-    None nếu phim không có ngày phát hành digital ở Mỹ trong khoảng [start, end]."""
-    us = next((r.get("release_dates", []) for r in (m.get("release_dates") or {}).get("results", [])
-               if r.get("iso_3166_1") == "US"), [])
-    digital = sorted((r for r in us if r.get("type") == 4 and start <= str(r.get("release_date", ""))[:10] <= end),
-                     key=lambda r: r["release_date"])
-    if not digital:
-        return None
-    rel = digital[0]
-    flatrate = ((m.get("watch/providers") or {}).get("results", {}).get("US") or {}).get("flatrate", [])
-    found = [streamer_of(rel.get("note"))] + [streamer_of(p.get("provider_name")) for p in flatrate]
-    platforms = list(dict.fromkeys(p for p in found if p))
-    theatrical = any(r.get("type") in (2, 3) and r.get("release_date", "") < rel["release_date"] for r in us)
-    title = m.get("title") or m.get("original_title") or ""
-    vn_date, vn_time = vn_release(rel["release_date"], platforms[0] if platforms else None)
+def _flatrate(m: dict, *regions) -> list:
+    """Nền tảng (trong STREAMERS) đang có phim theo gói thuê bao ở các nước đã cho."""
+    results = (m.get("watch/providers") or {}).get("results", {})
+    return [streamer_of(p.get("provider_name")) for r in regions for p in (results.get(r) or {}).get("flatrate", [])]
+
+
+def _calendar_item(m: dict, kind: str, day: str, platforms: list, **extra) -> dict:
+    """Một dòng lịch phim (phim lẻ hoặc phim bộ) từ chi tiết TMDB."""
+    is_tv = extra.get("type") == "tv"
+    title = (m.get("name") or m.get("original_name")) if is_tv else (m.get("title") or m.get("original_title"))
+    title = title or ""
+    vn_date, vn_time = vn_release(day, platforms[0] if platforms else None)
     videos = [v for v in (m.get("videos") or {}).get("results", [])
-              if v.get("site") == "YouTube" and v.get("type") == "Trailer" and re.fullmatch(r"[\w-]{6,20}", str(v.get("key", "")))]
-    videos.sort(key=lambda v: not v.get("official"))
+              if v.get("site") == "YouTube" and v.get("type") in ("Trailer", "Teaser")
+              and re.fullmatch(r"[\w-]{6,20}", str(v.get("key", "")))]
+    videos.sort(key=lambda v: (v.get("type") != "Trailer", not v.get("official")))
     trailer = (f"https://www.youtube.com/watch?v={videos[0]['key']}" if videos else
                "https://www.youtube.com/results?search_query=" + urllib.parse.quote(f"{title} {' '.join(platforms[:1])} trailer"))
     return {
-        "id": m.get("id"), "title": title, "year": str(m.get("release_date") or "")[:4],
-        "date": vn_date, "time": vn_time, "platforms": platforms,
-        "kind": "rent" if not platforms else "premiere" if theatrical else "original",
+        "id": m.get("id"), "type": "movie", "title": title,
+        "year": str(m.get("first_air_date" if is_tv else "release_date") or "")[:4],
+        "date": vn_date, "time": vn_time, "platforms": platforms, "kind": kind, "region": "US",
+        "lang": m.get("original_language") or "", "channel": "", "episodes": 0,
         "vn": any(STREAMERS[p]["vn"] for p in platforms), "overview": str(m.get("overview") or "")[:300],
-        "trailer": trailer, "url": f"https://www.themoviedb.org/movie/{m.get('id')}", "popularity": m.get("popularity") or 0,
+        "trailer": trailer, "url": f"https://www.themoviedb.org/{'tv' if is_tv else 'movie'}/{m.get('id')}",
+        "popularity": m.get("popularity") or 0, **extra,
     }
+
+
+def parse_tmdb_movie(m: dict, start: str, end: str, region: str = "US") -> list:
+    """Chi tiết phim TMDB (kèm release_dates, watch/providers, videos) -> các dòng lịch trong [start, end]:
+    lên streaming/digital ở nước đó (type 4), và với Hàn Quốc thêm cả ngày chiếu rạp (type 3)."""
+    dates = next((r.get("release_dates", []) for r in (m.get("release_dates") or {}).get("results", [])
+                  if r.get("iso_3166_1") == region), [])
+    items = []
+    for rtype in (4, 3) if region == "KR" else (4,):
+        hits = sorted((r for r in dates if r.get("type") == rtype and start <= str(r.get("release_date", ""))[:10] <= end),
+                      key=lambda r: r["release_date"])
+        if not hits:
+            continue
+        rel = hits[0]
+        if rtype == 3:
+            items.append(_calendar_item(m, "theater", rel["release_date"], [], region=region))
+            continue
+        platforms = list(dict.fromkeys(p for p in [streamer_of(rel.get("note"))] + _flatrate(m, region) if p))
+        theatrical = any(r.get("type") in (2, 3) and r.get("release_date", "") < rel["release_date"] for r in dates)
+        kind = "rent" if not platforms else "premiere" if theatrical else "original"
+        items.append(_calendar_item(m, kind, rel["release_date"], platforms, region=region))
+    return items
+
+
+def parse_tmdb_tv(t: dict, start: str, end: str):
+    """Chi tiết phim bộ TMDB (kèm watch/providers, videos) -> 1 dòng lịch theo ngày lên sóng tập đầu,
+    None nếu ngoài khoảng [start, end]. Kênh/nền tảng lấy từ networks (tvN, JTBC, Netflix...)."""
+    day = str(t.get("first_air_date") or "")[:10]
+    if not (day and start <= day <= end):
+        return None
+    networks = [str(n.get("name") or "") for n in t.get("networks") or []]
+    found = [streamer_of(n) for n in networks] + _flatrate(t, "KR", "US")
+    platforms = list(dict.fromkeys(p for p in found if p))
+    return _calendar_item(t, "series", day, platforms, type="tv", region="KR",
+                          channel=", ".join(n for n in networks if n and not streamer_of(n)),
+                          episodes=t.get("number_of_episodes") or 0)
 
 
 def tmdb_get(key: str, path: str, params: dict) -> dict:
@@ -537,28 +581,44 @@ def tmdb_get(key: str, path: str, params: dict) -> dict:
 
 
 def fetch_movie_calendar(key: str, today: date, get=tmdb_get) -> list:
-    """Phim có ngày phát hành digital ở Mỹ từ MOVIE_DAYS_BACK ngày trước đến MOVIE_DAYS_AHEAD ngày tới."""
+    """Lịch từ MOVIE_DAYS_BACK ngày trước đến MOVIE_DAYS_AHEAD ngày tới: phim lên streaming/digital ở Mỹ,
+    phim Hàn chiếu rạp/lên streaming ở Hàn Quốc, và phim bộ Hàn (K-drama) lên sóng tập đầu."""
     start = (today - timedelta(days=MOVIE_DAYS_BACK)).isoformat()
     end = (today + timedelta(days=MOVIE_DAYS_AHEAD)).isoformat()
-    ids = []
-    for page in range(1, MOVIE_PAGES + 1):
-        data = get(key, "/discover/movie", {
-            "region": "US", "with_release_type": 4, "release_date.gte": start, "release_date.lte": end,
-            "sort_by": "popularity.desc", "include_adult": "false", "page": page,
-        })
-        ids += [m["id"] for m in data.get("results", []) if isinstance(m.get("id"), int)]
-        if page >= data.get("total_pages", 0):
-            break
 
-    def detail(movie_id):
+    def discover(kind, params, pages):
+        ids = []
+        for page in range(1, pages + 1):
+            data = get(key, f"/discover/{kind}", {**params, "sort_by": "popularity.desc", "include_adult": "false", "page": page})
+            ids += [m["id"] for m in data.get("results", []) if isinstance(m.get("id"), int)]
+            if page >= data.get("total_pages", 0):
+                break
+        return ids
+
+    def detail(kind, item_id):
+        extra = "release_dates,watch/providers,videos" if kind == "movie" else "watch/providers,videos"
         try:
-            return get(key, f"/movie/{movie_id}", {"append_to_response": "release_dates,watch/providers,videos"})
+            return get(key, f"/{kind}/{item_id}", {"append_to_response": extra})
         except (urllib.error.URLError, OSError, ValueError):
             return None  # lỗi 1 phim thì bỏ phim đó
 
+    dates = {"release_date.gte": start, "release_date.lte": end}
+    movie_ids = dict.fromkeys(
+        discover("movie", {"region": "US", "with_release_type": 4, **dates}, MOVIE_PAGES)
+        + discover("movie", {"region": "KR", "with_release_type": "3|4", "with_original_language": "ko", **dates}, KR_PAGES))
+    tv_ids = dict.fromkeys(discover("tv", {"with_original_language": "ko", "first_air_date.gte": start,
+                                           "first_air_date.lte": end}, KR_PAGES))
     with ThreadPoolExecutor(max_workers=8) as pool:
-        items = [parse_tmdb_movie(d, start, end) for d in pool.map(detail, dict.fromkeys(ids)) if d]
-    return sorted((i for i in items if i), key=lambda i: (i["date"], i["time"], -i["popularity"]))
+        movies = [m for m in pool.map(lambda i: detail("movie", i), movie_ids) if m]
+        shows = [t for t in pool.map(lambda i: detail("tv", i), tv_ids) if t]
+    items = []
+    for m in movies:
+        us = parse_tmdb_movie(m, start, end, "US")
+        kr = parse_tmdb_movie(m, start, end, "KR") if m.get("original_language") == "ko" else []
+        # phim Hàn ra toàn cầu (Netflix...) đã có lịch Mỹ: bỏ bản trùng ở Hàn, chỉ giữ ngày chiếu rạp
+        items += us + [i for i in kr if i["kind"] == "theater" or not us]
+    items += [i for i in (parse_tmdb_tv(t, start, end) for t in shows) if i]
+    return sorted(items, key=lambda i: (i["date"], i["time"] or "99", -i["popularity"]))
 
 
 def tmdb_error(e: urllib.error.HTTPError) -> str:
@@ -1601,9 +1661,12 @@ class Api:
                 cache = json.loads(MOVIES_FILE.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 cache = {}
+            if cache.get("v") != MOVIES_CACHE_VERSION:
+                cache = {}  # cache của bản app cũ thiếu trường mới
             if refresh or time.time() - cache.get("fetched_at", 0) > MOVIES_MAX_AGE:
                 try:
-                    cache = {"fetched_at": int(time.time()), "items": fetch_movie_calendar(key, date.today())}
+                    cache = {"v": MOVIES_CACHE_VERSION, "fetched_at": int(time.time()),
+                             "items": fetch_movie_calendar(key, date.today())}
                     MOVIES_FILE.parent.mkdir(parents=True, exist_ok=True)
                     MOVIES_FILE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
                 except urllib.error.HTTPError as e:

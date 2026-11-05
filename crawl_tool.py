@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.5.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.5.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -1163,8 +1163,9 @@ class Api:
                 if not self._login_run(platform, headless=False):
                     self._write(f"[LỖI] Chưa đăng nhập được {name} (hết giờ chờ hoặc cửa sổ bị đóng). Thử lại khi sẵn sàng.")
                     return
-                self._write(f"Đã đăng nhập {name}. Đang mở lại Chrome (ẩn) để kiểm tra phiên được giữ sau khi đóng...")
-            if self._login_run(platform, headless=True):
+                self._write(f"Đã đăng nhập {name}. Đang mở lại Chrome để kiểm tra phiên được giữ sau khi đóng (cửa sổ tự đóng)...")
+            # Không chạy ẩn: Douyin, Xiaohongshu coi Chrome ẩn là chưa đăng nhập dù phiên vẫn còn
+            if self._login_run(platform, headless=False):
                 self._write(f"Hoàn tất. {name}: phiên đăng nhập được giữ, các lần crawl sau không phải đăng nhập lại.")
             else:
                 self._write(f"[LỖI] {name}: phiên đăng nhập KHÔNG còn sau khi đóng Chrome. Bấm Copy log và gửi để phân tích.")

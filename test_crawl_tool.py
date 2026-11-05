@@ -474,6 +474,11 @@ def test_app_self_update():
         assert exe.read_bytes() == exe_bytes and (Path(tmp) / "CrawlTool.old.exe").read_bytes() == b"MZ old"
         ct.remove_old_exe(exe)
         assert not (Path(tmp) / "CrawlTool.old.exe").exists()
+        # mở lại bản mới phải reset môi trường PyInstaller, không thì bản mới mất thư mục tạm (mất uv.exe)
+        from unittest import mock
+        with mock.patch.object(ct.subprocess, "Popen") as popen:
+            ct.launch_fresh(exe)
+        assert popen.call_args.kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
 
     api = ct.Api()
     assert api.update_app()["error"] == "Đang dùng bản mới nhất"

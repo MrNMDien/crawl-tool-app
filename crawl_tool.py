@@ -29,7 +29,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.3.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.3.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -177,6 +177,12 @@ def apply_app_update(data: bytes, exe: Path, sha256: str) -> None:
     except OSError:
         old.rename(exe)  # trả lại bản cũ nếu không thay được
         raise
+
+
+def launch_fresh(exe: Path) -> None:
+    """Mở một bản CrawlTool khác. Phải reset môi trường PyInstaller: nếu không, bản mới dùng chung thư mục
+    tạm _MEI của bản đang chạy, bản này thoát là thư mục bị xóa (mất uv.exe -> [WinError 2])."""
+    subprocess.Popen([str(exe)], cwd=str(exe.parent), env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
 
 
 def remove_old_exe(exe: Path) -> None:
@@ -888,7 +894,7 @@ def self_install_if_needed() -> bool:
     target = INSTALL_DIR / f"{APP_NAME}.exe"
     shutil.copy2(exe, target)
     create_shortcuts(target)
-    subprocess.Popen([str(target)], cwd=str(INSTALL_DIR))
+    launch_fresh(target)
     return True
 
 
@@ -1012,7 +1018,7 @@ class Api:
             data = github_download_asset(info["asset_url"])
             apply_app_update(data, exe, info["sha256"])
             self._write("Đã cài bản mới, đang khởi động lại...")
-            subprocess.Popen([str(exe)], cwd=str(exe.parent))
+            launch_fresh(exe)
             if self._window:
                 self._window.destroy()
         except Exception as e:  # noqa: BLE001

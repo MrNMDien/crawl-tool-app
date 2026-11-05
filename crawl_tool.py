@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.5.2"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.5.3"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 

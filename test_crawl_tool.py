@@ -358,13 +358,17 @@ def test_login_button_flow():
         base.mkdir()
         bd.mkdir()
         mode = Path(tmp) / "mode.txt"  # crawler giả: "ok" | "lost" (mất phiên khi mở lại) | "fail"
+        runs = Path(tmp) / "runs.txt"  # đếm số lần chạy: lần 2 trở đi là lần mở lại để kiểm tra
         (base / "run").write_text("\n".join([
             "import os, sys, pathlib",
             f"mode = pathlib.Path(r'{mode}').read_text()",
             "headless = sys.argv[sys.argv.index('--headless') + 1] == 'true'",
             "assert os.environ['MEDIACRAWLER_LOGIN_ONLY'] == '1'",
-            "print('headless' if headless else 'window')",
-            "if mode == 'ok' or (mode == 'lost' and not headless):",
+            f"runs = pathlib.Path(r'{runs}')",
+            "n = int(runs.read_text()) + 1 if runs.exists() else 1",
+            "runs.write_text(str(n))",
+            "print('headless' if headless else 'window', 'run', n)",
+            "if mode == 'ok' or (mode == 'lost' and n == 1):",
             "    print('[Đăng nhập] Douyin: LOGIN_OK')",
         ]), encoding="utf-8")
         old = ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.uv_path
@@ -376,6 +380,7 @@ def test_login_button_flow():
 
             def run(verify_only):
                 api._lines.clear()
+                runs.unlink(missing_ok=True)
                 assert api.login_platform("dy", verify_only) == {"ok": True}
                 assert api.login_platform("dy", verify_only)["error"]  # đang bận
                 began = time.time()
@@ -385,7 +390,8 @@ def test_login_button_flow():
 
             mode.write_text("ok")
             log = run(False)
-            assert "window" in log and "headless" in log and "phiên đăng nhập được giữ" in log
+            # kiểm tra lại cũng mở cửa sổ: Douyin/Xiaohongshu coi Chrome ẩn là chưa đăng nhập
+            assert "window run 2" in log and "headless" not in log and "phiên đăng nhập được giữ" in log
             assert not (bd / "dy.logged_in").exists()  # bấm Đăng nhập thì bỏ dấu cũ (base ghi lại khi LOGIN_OK)
 
             mode.write_text("lost")
@@ -394,11 +400,11 @@ def test_login_button_flow():
 
             mode.write_text("fail")
             log = run(False)
-            assert "Chưa đăng nhập được" in log and "headless" not in log  # không đăng nhập được thì không kiểm tra lại
+            assert "Chưa đăng nhập được" in log and "run 2" not in log  # không đăng nhập được thì không kiểm tra lại
 
             mode.write_text("ok")
-            log = run(True)  # Kiểm tra phiên: chỉ chạy ẩn
-            assert "window" not in log and "phiên đăng nhập được giữ" in log
+            log = run(True)  # Kiểm tra phiên: chạy 1 lần
+            assert "run 2" not in log and "headless" not in log and "phiên đăng nhập được giữ" in log
             assert api.login_platform("nope")["error"]
         finally:
             ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.uv_path = old

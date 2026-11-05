@@ -1219,7 +1219,7 @@ function renderLogin() {
   $("login-hint").textContent = login.type === "cookie"
     ? "Dán cookie của từng nền tảng (lấy từ trình duyệt đã đăng nhập). Crawl nền tảng nào thì cần cookie của nền tảng đó."
     : "Khi crawl, app mở cửa sổ Chrome riêng cho mỗi nền tảng. Lần đầu đăng nhập trong cửa sổ đó (QR, SMS hay mật khẩu đều được); các lần sau app dùng lại phiên cũ. " +
-      "Bấm “Đăng nhập” bên dưới để đăng nhập một lần (app tự kiểm tra phiên được giữ). Nếu sau này nền tảng báo phiên hết hạn, app dừng và KHÔNG tự đăng nhập lại (tránh bị khóa vì nghi bot): kiểm tra tài khoản rồi bấm “Đăng nhập lại”.";
+      "Bấm “Đăng nhập” bên dưới để đăng nhập một lần (app tự kiểm tra phiên được giữ). Nếu lúc crawl phiên đã hết hạn, cửa sổ Chrome sẽ hiện trang đăng nhập và chờ bạn đăng nhập (khoảng 10 phút), xong thì crawl tiếp. Đóng cửa sổ hoặc bấm Dừng để hủy.";
   const list = $("cookie-list");
   list.hidden = login.type !== "cookie";
   list.replaceChildren();

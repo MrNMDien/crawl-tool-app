@@ -122,7 +122,31 @@
   .switch .text b { font-weight: 600; }
 
   /* ---------- Tab Crawl: form bên trái, kết quả bên phải ---------- */
-  #view-crawl, #view-library, #view-follow { gap: 16px; padding: 16px; }
+  #view-crawl, #view-library, #view-follow, #view-movies { gap: 16px; padding: 16px; }
+
+  /* ---------- Lịch phim ---------- */
+  .mv-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 16px; border-bottom: 1px solid var(--border); flex: none; }
+  .mv-filters .seg button small { font-weight: 500; color: var(--faint); margin-left: 4px; }
+  .mv-check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .mv-check input { width: auto; margin: 0; }
+  .mv-board { flex: 1; overflow-y: auto; padding: 0 16px 24px; }
+  .mv-day { display: grid; grid-template-columns: 92px 1fr; border-top: 1px solid var(--border); }
+  .mv-day:first-child { border-top: 0; }
+  .mv-day.past { opacity: .55; }
+  .mv-date { padding: 12px 0; display: flex; flex-direction: column; gap: 2px; }
+  .mv-date b { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .mv-date span { font-size: 12px; color: var(--muted); }
+  .mv-day.today .mv-date span { color: var(--accent); font-weight: 700; }
+  .mv-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+  .mv-item + .mv-item { border-top: 1px dashed var(--border); }
+  .mv-time { font: 600 13px Consolas, monospace; color: var(--accent); width: 42px; flex: none; }
+  .mv-title { flex: 1; min-width: 0; }
+  .mv-title b { font-weight: 600; }
+  .mv-title b small { font-weight: 400; color: var(--muted); margin-left: 4px; }
+  .mv-title .sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mv-plat { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 150px; font-size: 12.5px; white-space: nowrap; }
+  .mv-item > .chip { min-width: 70px; }
+  .mv-plat i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .form-panel { width: 360px; flex: none; display: flex; flex-direction: column; overflow: hidden; }
   .form-scroll { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
   .form-foot { padding: 12px 18px; border-top: 1px solid var(--border); display: flex; gap: 8px; }
@@ -302,6 +326,7 @@
     <button data-tab="crawl" class="active"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>Crawl</button>
     <button data-tab="library"><svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z"/></svg>Thư viện <span class="count" id="lib-count">0</span></button>
     <button data-tab="follow"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>Theo dõi <span class="count" id="follow-count">0</span></button>
+    <button data-tab="movies"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Lịch phim</button>
     <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>Cài đặt</button>
   </nav>
   <div class="spacer"></div>
@@ -405,6 +430,24 @@
     <div class="card panel" id="follow-gallery"></div>
   </section>
 
+  <!-- ===== Tab Lịch phim (TMDB) ===== -->
+  <section class="view" id="view-movies">
+    <div class="card panel">
+      <div class="toolbar">
+        <h2>Lịch ra mắt phim</h2>
+        <span class="total" id="mv-status"></span>
+        <div class="spacer"></div>
+        <button class="btn sm icon" id="mv-reload" type="button" title="Lấy lịch mới nhất từ TMDB"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg></button>
+      </div>
+      <div class="mv-filters" id="mv-filters">
+        <div class="seg" id="mv-chips"></div>
+        <label class="mv-check"><input type="checkbox" id="mv-hide-rent" checked> Ẩn phim chỉ thuê/mua</label>
+        <label class="mv-check"><input type="checkbox" id="mv-vn-only"> Chỉ nền tảng có ở VN</label>
+      </div>
+      <div class="mv-board" id="mv-board"></div>
+    </div>
+  </section>
+
   <!-- ===== Tab Cài đặt ===== -->
   <section class="view" id="view-settings">
     <div class="settings">
@@ -447,6 +490,12 @@
           </div>
           <div><button class="link" id="btn-gem-clear" type="button">Xóa key</button></div>
         </div>
+      </div>
+      <div class="card setting col">
+        <div class="head"><div class="info"><h3>TMDB API (lịch phim) <span class="chip" id="tmdb-status">chưa có key</span></h3>
+          <p>Tab Lịch phim lấy dữ liệu từ TMDB và tự làm mới mỗi 6 giờ. Đăng ký miễn phí ở <button class="link" id="btn-tmdb-link" type="button">themoviedb.org</button> → Settings → API, copy <b>API Key</b> hoặc <b>API Read Access Token</b>. Key lưu mã hóa trên máy này.</p></div></div>
+        <div class="tg-row"><input type="password" id="tmdb-key" data-paste placeholder="Dán TMDB API key" autocomplete="off"><button class="btn" id="tmdb-save" type="button">Lưu</button></div>
+        <div><button class="link" id="tmdb-clear" type="button">Xóa key</button></div>
       </div>
       <div class="card setting">
         <div class="info"><h3>Thư mục kết quả</h3><p><code id="data-dir">—</code></p></div>
@@ -576,6 +625,7 @@ function confirmBox(title, text) {
 function showTab(name) {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
+  if (name === "movies") loadMovies(false);  // cache còn mới thì trả ngay, cũ hơn 6 giờ thì app tự lấy lại
 }
 document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 
@@ -1264,6 +1314,115 @@ $("btn-gem-save").onclick = async () => {
 };
 $("btn-gem-clear").onclick = async () => { renderGemini(await api().set_gemini(null, null, true)); toast("Đã xóa key Gemini"); };
 
+// ---------- Lịch phim (TMDB) ----------
+const STREAM_COLORS = { Netflix: "#e50914", "HBO Max": "#7b4dff", "Prime Video": "#1a98ff", "Apple TV": "#8e8e93",
+  "Disney+": "#113ccf", Hulu: "#1ce783", Peacock: "#f5b400", "Paramount+": "#0064ff" };
+const MOVIE_KINDS = { original: ["Phim gốc", "chip new"], premiere: ["Từ rạp", "chip ok"], rent: ["Thuê/mua", "chip"] };
+const WEEKDAYS = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
+const movies = { data: null, off: new Set(), loading: false };
+
+async function loadMovies(refresh) {
+  if (movies.loading) return;
+  movies.loading = true;
+  $("mv-reload").disabled = true;
+  $("mv-status").textContent = "Đang lấy lịch phim từ TMDB...";
+  try {
+    movies.data = await api().movies(!!refresh);
+    if (movies.data.error) toast(movies.data.error, true);
+    renderMovies();
+  } finally {
+    movies.loading = false;
+    $("mv-reload").disabled = false;
+  }
+}
+$("mv-reload").onclick = () => loadMovies(true);
+$("mv-hide-rent").onchange = $("mv-vn-only").onchange = () => renderMovies();
+
+function renderMovies() {
+  const d = movies.data, board = $("mv-board");
+  $("mv-filters").hidden = !d?.has_key;
+  if (!d?.has_key) {
+    $("mv-status").textContent = "";
+    const empty = el("div", "empty-state");
+    empty.innerHTML = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>';
+    const go = el("button", "btn primary", "Mở Cài đặt");
+    go.onclick = () => showTab("settings");
+    empty.append(el("b", "", "Cần TMDB API key"),
+      el("span", "", "Lịch phim lấy từ TMDB (miễn phí). Vào Cài đặt → TMDB API, dán key là app tự tải lịch."), go);
+    return board.replaceChildren(empty);
+  }
+  const chips = $("mv-chips");
+  chips.replaceChildren(...Object.entries(d.streamers).map(([name, vn]) => {
+    const b = el("button", movies.off.has(name) ? "" : "on", name);
+    b.type = "button";
+    if (!vn) b.append(el("small", "", "chưa có ở VN"));
+    b.onclick = () => { movies.off.has(name) ? movies.off.delete(name) : movies.off.add(name); renderMovies(); };
+    return b;
+  }));
+  const hideRent = $("mv-hide-rent").checked, vnOnly = $("mv-vn-only").checked;
+  const rows = d.items.filter((m) => m.platforms.length
+    ? m.platforms.some((p) => !movies.off.has(p) && (!vnOnly || d.streamers[p]))
+    : !hideRent && !vnOnly);
+  $("mv-status").textContent = `${rows.length} phim · giờ Việt Nam · cập nhật ${d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString("vi-VN") : "—"}`;
+
+  const today = new Date().toLocaleDateString("en-CA");  // YYYY-MM-DD theo giờ máy
+  const byDay = new Map();
+  for (const m of rows) (byDay.get(m.date) || byDay.set(m.date, []).get(m.date)).push(m);
+  if (!byDay.size) {
+    const empty = el("div", "empty-state");
+    empty.append(el("b", "", "Không có phim nào khớp bộ lọc"), el("span", "", "Bật thêm nền tảng hoặc bỏ bớt ô lọc ở trên."));
+    return board.replaceChildren(empty);
+  }
+  board.replaceChildren(...[...byDay].map(([date, items]) => {
+    const [y, mo, da] = date.split("-").map(Number);
+    const day = el("div", "mv-day" + (date === today ? " today" : date < today ? " past" : ""));
+    const dateBox = el("div", "mv-date");
+    dateBox.append(el("b", "", `${String(da).padStart(2, "0")}/${String(mo).padStart(2, "0")}`),
+      el("span", "", date === today ? "Hôm nay" : WEEKDAYS[new Date(y, mo - 1, da).getDay()]));
+    const list = el("div");
+    list.append(...items.map((m) => {
+      const row = el("div", "mv-item");
+      const title = el("div", "mv-title");
+      const name = el("b", "", m.title);
+      if (m.year) name.append(el("small", "", m.year));
+      title.append(name, el("div", "sub", m.overview || ""));
+      title.title = m.overview || "";
+      const plats = el("div", "mv-plat");
+      for (const p of m.platforms) {
+        const dot = el("i");
+        dot.style.background = STREAM_COLORS[p] || "var(--faint)";
+        plats.append(dot, p);
+      }
+      const [kindText, kindCls] = MOVIE_KINDS[m.kind] || MOVIE_KINDS.rent;
+      const trailer = el("button", "btn sm", "▶ Trailer");
+      trailer.onclick = () => api().open_url(m.trailer);
+      const info = el("button", "btn sm icon");
+      info.innerHTML = ICON.open;
+      info.title = "Xem trên TMDB";
+      info.onclick = () => api().open_url(m.url);
+      row.append(el("span", "mv-time", m.time), title, plats, el("span", kindCls, kindText), trailer, info);
+      return row;
+    }));
+    day.append(dateBox, list);
+    return day;
+  }));
+}
+
+function renderTmdb(t) {
+  $("tmdb-status").textContent = t.has_key ? "đã có key" : "chưa có key";
+  $("tmdb-status").className = "chip" + (t.has_key ? " ok" : "");
+  $("tmdb-clear").hidden = !t.has_key;
+  movies.data = null;  // đổi key: lần mở tab tới sẽ tải lại
+}
+$("btn-tmdb-link").onclick = () => api().open_url("https://www.themoviedb.org/settings/api");
+$("tmdb-save").onclick = async () => {
+  if (!$("tmdb-key").value.trim()) return toast("Dán TMDB API key trước khi lưu", true);
+  renderTmdb(await api().set_tmdb($("tmdb-key").value));
+  $("tmdb-key").value = "";
+  toast("Đã lưu key TMDB. Mở tab Lịch phim để xem.");
+};
+$("tmdb-clear").onclick = async () => { renderTmdb(await api().set_tmdb(null, true)); toast("Đã xóa key TMDB"); };
+
 // ---------- Chủ đề tìm kiếm -> từ khóa (Gemini) ----------
 // Nhãn tiếng Việt + cách gọi tiếng Trung, gửi cả hai cho Gemini để từ khóa sát thể loại
 const GENRES = [["Cổ trang", "古装"], ["Hiện đại / đô thị", "都市"], ["Tu tiên / huyền huyễn", "修仙玄幻"], ["Trọng sinh / xuyên không", "重生穿越"],
@@ -1473,6 +1632,7 @@ window.addEventListener("pywebviewready", async () => {
   state.login = info.login;
   renderLogin();
   renderGemini(info.gemini);
+  renderTmdb(info.tmdb);
   state.aiTopic = info.ai_topic;
   appendLog(info.warnings.map((w) => "[CẢNH BÁO] " + w));
   api().check_update();

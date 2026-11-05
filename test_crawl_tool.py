@@ -639,7 +639,89 @@ def test_base_update_keeps_login_profiles():
             ct.APP_HOME, ct.BASE_DIR, ct.BROWSER_DATA_DIR, ct.save_settings = old
 
 
+def test_movie_calendar():
+    from datetime import date
+    # Giờ mùa hè Mỹ 2026: 08/03 -> 01/11 (đổi lúc 2 giờ sáng, nên 00:00 ngày đổi vẫn theo giờ cũ)
+    assert [ct.pacific_offset(date(2026, 3, d)) for d in (8, 9)] == [-8, -7]
+    assert [ct.pacific_offset(date(2026, 11, d)) for d in (1, 2)] == [-7, -8]
+    assert ct.vn_release("2026-11-06T00:00:00.000Z", "Netflix") == ("2026-11-06", "15:00")
+    assert ct.vn_release("2026-11-01", "Netflix") == ("2026-11-01", "14:00")
+    assert ct.vn_release("2026-11-18", "Prime Video") == ("2026-11-18", "07:00")
+    assert ct.streamer_of("Netflix Standard with Ads") == "Netflix"
+    assert ct.streamer_of("Paramount+ Amazon Channel") == "Paramount+"
+    assert ct.streamer_of("Max") == "HBO Max" and ct.streamer_of("Maxdome") is None and ct.streamer_of(None) is None
+
+    def movie(mid, us_dates, note="", flatrate=(), videos=()):
+        return {
+            "id": mid, "title": f"Phim {mid}", "release_date": "2026-01-01", "popularity": mid,
+            "release_dates": {"results": [{"iso_3166_1": "GB", "release_dates": [{"type": 4, "release_date": "2026-11-05"}]},
+                                          {"iso_3166_1": "US", "release_dates": [
+                                              {"type": t, "release_date": d, "note": note} for t, d in us_dates]}]},
+            "watch/providers": {"results": {"US": {"flatrate": [{"provider_name": p} for p in flatrate]}}},
+            "videos": {"results": list(videos)},
+        }
+
+    movies = {
+        1: movie(1, [(4, "2026-11-09T00:00:00.000Z")], note="Netflix",
+                 videos=[{"site": "YouTube", "type": "Teaser", "key": "teaser00001"},
+                         {"site": "YouTube", "type": "Trailer", "key": "unofficial1", "official": False},
+                         {"site": "YouTube", "type": "Trailer", "key": "official001", "official": True}]),
+        2: movie(2, [(3, "2026-09-01"), (4, "2026-11-20")], flatrate=["HBO Max", "Some Local Service"]),
+        3: movie(3, [(4, "2026-11-12")]),  # chỉ thuê/mua
+        4: movie(4, [(4, "2027-03-01")], note="Netflix"),  # ngoài khoảng
+        5: movie(5, [(4, "2026-11-25")], flatrate=["Hulu"]),  # lỗi khi lấy chi tiết
+    }
+    calls = []
+
+    def fake_get(key, path, params):
+        calls.append((path, params))
+        assert key == "k"
+        if path == "/discover/movie":
+            assert params["region"] == "US" and params["with_release_type"] == 4
+            assert (params["release_date.gte"], params["release_date.lte"]) == ("2026-10-29", "2027-01-04")
+            return {"results": [{"id": i} for i in (4, 3, 2, 1, 1, 5)], "total_pages": 1}
+        mid = int(path.rsplit("/", 1)[1])
+        if mid == 5:
+            raise ct.urllib.error.URLError("timeout")
+        return movies[mid]
+
+    items = ct.fetch_movie_calendar("k", date(2026, 11, 5), get=fake_get)
+    assert [c[0] for c in calls].count("/discover/movie") == 1  # total_pages = 1: không gọi trang 2
+    assert [c[0] for c in calls].count("/movie/1") == 1  # id trùng chỉ lấy 1 lần
+    assert [i["id"] for i in items] == [1, 3, 2]
+    netflix, rent, hbo = items
+    assert (netflix["date"], netflix["time"], netflix["platforms"], netflix["kind"], netflix["vn"]) == \
+        ("2026-11-09", "15:00", ["Netflix"], "original", True)
+    assert netflix["trailer"] == "https://www.youtube.com/watch?v=official001"
+    assert (hbo["platforms"], hbo["kind"]) == (["HBO Max"], "premiere")
+    assert (rent["platforms"], rent["kind"], rent["vn"]) == ([], "rent", False)
+    assert rent["trailer"].startswith("https://www.youtube.com/results?search_query=Phim%203")
+
+    # Api: chưa có key thì không gọi mạng; có key thì cache, quá 6 giờ mới lấy lại
+    with tempfile.TemporaryDirectory() as tmp:
+        old_file, old_fetch, old_settings = ct.MOVIES_FILE, ct.fetch_movie_calendar, ct.SETTINGS_FILE
+        ct.MOVIES_FILE, ct.SETTINGS_FILE = Path(tmp) / "movies.json", Path(tmp) / "settings.json"
+        fetched = []
+        ct.fetch_movie_calendar = lambda key, today: fetched.append(key) or [{"id": 9}]
+        try:
+            api = ct.Api()
+            assert api.movies() == {"has_key": False, "items": [], "fetched_at": 0,
+                                    "streamers": {n: s["vn"] for n, s in ct.STREAMERS.items()}}
+            assert api.set_tmdb("  key123  ") == {"has_key": True} and api._tmdb_key() == "key123"
+            assert api.movies()["items"] == [{"id": 9}] and api.movies()["items"] == [{"id": 9}]
+            assert fetched == ["key123"]  # lần 2 lấy từ cache
+            api.movies(refresh=True)
+            assert len(fetched) == 2
+            ct.fetch_movie_calendar = lambda key, today: (_ for _ in ()).throw(ct.urllib.error.URLError("offline"))
+            res = api.movies(refresh=True)
+            assert res["items"] == [{"id": 9}] and "Không tải được" in res["error"]  # lỗi mạng vẫn giữ lịch cũ
+            assert api.set_tmdb(clear=True) == {"has_key": False} and not ct.MOVIES_FILE.exists()
+        finally:
+            ct.MOVIES_FILE, ct.fetch_movie_calendar, ct.SETTINGS_FILE = old_file, old_fetch, old_settings
+
+
 if __name__ == "__main__":
+    test_movie_calendar()
     test_build_args()
     test_build_jobs()
     test_login_settings()

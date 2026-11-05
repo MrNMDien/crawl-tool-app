@@ -26,10 +26,11 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.3.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.4.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -77,6 +78,23 @@ MAX_THUMB_BYTES = 5 * 1024 * 1024
 UI_LOGIN_TYPES = ("qrcode", "cookie")  # "qrcode" = đăng nhập trong cửa sổ Chrome (QR, SMS, mật khẩu đều được)
 GEMINI_DEFAULT_MODEL = "gemini-flash-latest"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+TMDB_API = "https://api.themoviedb.org/3"
+MOVIES_FILE = APP_HOME / "movies.json"  # cache lịch phim, lấy lại khi cũ hơn MOVIES_MAX_AGE
+MOVIES_MAX_AGE = 6 * 3600
+MOVIE_DAYS_BACK, MOVIE_DAYS_AHEAD, MOVIE_PAGES = 7, 60, 5  # 5 trang discover = 100 phim phổ biến nhất
+# Nền tảng streaming ở Mỹ: tên hiển thị -> tên TMDB/JustWatch dùng (khớp đầu chuỗi, vì có cả
+# "Netflix Standard with Ads", "Paramount+ Amazon Channel"...). vn: có chính thức ở Việt Nam.
+# drop: giờ lên sóng thường lệ, "pt" = 00:00 giờ Thái Bình Dương, "gmt" = 00:00 GMT.
+STREAMERS = {
+    "Netflix": {"names": ("netflix",), "vn": True, "drop": "pt"},
+    "HBO Max": {"names": ("hbo max", "max"), "vn": True, "drop": "pt"},
+    "Prime Video": {"names": ("amazon prime video", "prime video"), "vn": True, "drop": "gmt"},
+    "Apple TV": {"names": ("apple tv+", "apple tv plus", "apple tv"), "vn": True, "drop": "pt"},
+    "Disney+": {"names": ("disney plus", "disney+"), "vn": False, "drop": "pt"},
+    "Hulu": {"names": ("hulu",), "vn": False, "drop": "pt"},
+    "Peacock": {"names": ("peacock",), "vn": False, "drop": "pt"},
+    "Paramount+": {"names": ("paramount plus", "paramount+"), "vn": False, "drop": "pt"},
+}
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 
@@ -448,6 +466,105 @@ def gemini_error(e: urllib.error.HTTPError) -> str:
     hint = {400: "API key sai hoặc yêu cầu không hợp lệ", 403: "API key không có quyền dùng Gemini API",
             404: "Không có model này, kiểm tra tên model trong Cài đặt", 429: "Hết hạn mức Gemini, thử lại sau"}
     return f"Gemini báo lỗi {e.code}: {hint.get(e.code, 'lỗi không rõ')}" + (f" ({detail[:200]})" if detail else "")
+
+
+# ---------- Lịch ra mắt phim trên các nền tảng streaming (TMDB) ----------
+
+def streamer_of(name):
+    """Tên nhà cung cấp/ghi chú của TMDB -> tên nền tảng trong STREAMERS, không khớp thì None."""
+    n = re.sub(r"\s+", " ", str(name or "").lower()).strip()
+    for platform, info in STREAMERS.items():
+        if any(n == a or n.startswith(a + " ") for a in info["names"]):
+            return platform
+    return None
+
+
+def pacific_offset(day: date) -> int:
+    """Lệch giờ Thái Bình Dương lúc 00:00 ngày đó: -7 nếu đang giờ mùa hè, ngược lại -8.
+    Giờ mùa hè đổi lúc 2 giờ sáng: từ Chủ nhật thứ 2 tháng 3 đến Chủ nhật đầu tháng 11."""
+    start = date(day.year, 3, 8 + (6 - date(day.year, 3, 8).weekday()) % 7)
+    end = date(day.year, 11, 1 + (6 - date(day.year, 11, 1).weekday()) % 7)
+    return -7 if start < day <= end else -8
+
+
+def vn_release(day: str, platform) -> tuple:
+    """Ngày phát hành ở Mỹ ("2026-11-06...") -> (ngày, giờ) theo giờ Việt Nam (GMT+7)."""
+    d = date.fromisoformat(day[:10])
+    offset = 0 if STREAMERS.get(platform, {}).get("drop") == "gmt" else pacific_offset(d)
+    vn = datetime(d.year, d.month, d.day) + timedelta(hours=7 - offset)
+    return vn.date().isoformat(), vn.strftime("%H:%M")
+
+
+def parse_tmdb_movie(m: dict, start: str, end: str):
+    """Chi tiết phim TMDB (kèm release_dates, watch/providers, videos) -> 1 dòng lịch phim;
+    None nếu phim không có ngày phát hành digital ở Mỹ trong khoảng [start, end]."""
+    us = next((r.get("release_dates", []) for r in (m.get("release_dates") or {}).get("results", [])
+               if r.get("iso_3166_1") == "US"), [])
+    digital = sorted((r for r in us if r.get("type") == 4 and start <= str(r.get("release_date", ""))[:10] <= end),
+                     key=lambda r: r["release_date"])
+    if not digital:
+        return None
+    rel = digital[0]
+    flatrate = ((m.get("watch/providers") or {}).get("results", {}).get("US") or {}).get("flatrate", [])
+    found = [streamer_of(rel.get("note"))] + [streamer_of(p.get("provider_name")) for p in flatrate]
+    platforms = list(dict.fromkeys(p for p in found if p))
+    theatrical = any(r.get("type") in (2, 3) and r.get("release_date", "") < rel["release_date"] for r in us)
+    title = m.get("title") or m.get("original_title") or ""
+    vn_date, vn_time = vn_release(rel["release_date"], platforms[0] if platforms else None)
+    videos = [v for v in (m.get("videos") or {}).get("results", [])
+              if v.get("site") == "YouTube" and v.get("type") == "Trailer" and re.fullmatch(r"[\w-]{6,20}", str(v.get("key", "")))]
+    videos.sort(key=lambda v: not v.get("official"))
+    trailer = (f"https://www.youtube.com/watch?v={videos[0]['key']}" if videos else
+               "https://www.youtube.com/results?search_query=" + urllib.parse.quote(f"{title} {' '.join(platforms[:1])} trailer"))
+    return {
+        "id": m.get("id"), "title": title, "year": str(m.get("release_date") or "")[:4],
+        "date": vn_date, "time": vn_time, "platforms": platforms,
+        "kind": "rent" if not platforms else "premiere" if theatrical else "original",
+        "vn": any(STREAMERS[p]["vn"] for p in platforms), "overview": str(m.get("overview") or "")[:300],
+        "trailer": trailer, "url": f"https://www.themoviedb.org/movie/{m.get('id')}", "popularity": m.get("popularity") or 0,
+    }
+
+
+def tmdb_get(key: str, path: str, params: dict) -> dict:
+    headers = {"Accept": "application/json", "User-Agent": APP_NAME}
+    if key.startswith("eyJ"):  # API Read Access Token (v4) đi qua header; API key (v3) đi qua tham số
+        headers["Authorization"] = f"Bearer {key}"
+    else:
+        params = {**params, "api_key": key}
+    req = urllib.request.Request(f"{TMDB_API}{path}?{urllib.parse.urlencode(params)}", headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def fetch_movie_calendar(key: str, today: date, get=tmdb_get) -> list:
+    """Phim có ngày phát hành digital ở Mỹ từ MOVIE_DAYS_BACK ngày trước đến MOVIE_DAYS_AHEAD ngày tới."""
+    start = (today - timedelta(days=MOVIE_DAYS_BACK)).isoformat()
+    end = (today + timedelta(days=MOVIE_DAYS_AHEAD)).isoformat()
+    ids = []
+    for page in range(1, MOVIE_PAGES + 1):
+        data = get(key, "/discover/movie", {
+            "region": "US", "with_release_type": 4, "release_date.gte": start, "release_date.lte": end,
+            "sort_by": "popularity.desc", "include_adult": "false", "page": page,
+        })
+        ids += [m["id"] for m in data.get("results", []) if isinstance(m.get("id"), int)]
+        if page >= data.get("total_pages", 0):
+            break
+
+    def detail(movie_id):
+        try:
+            return get(key, f"/movie/{movie_id}", {"append_to_response": "release_dates,watch/providers,videos"})
+        except (urllib.error.URLError, OSError, ValueError):
+            return None  # lỗi 1 phim thì bỏ phim đó
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        items = [parse_tmdb_movie(d, start, end) for d in pool.map(detail, dict.fromkeys(ids)) if d]
+    return sorted((i for i in items if i), key=lambda i: (i["date"], i["time"], -i["popularity"]))
+
+
+def tmdb_error(e: urllib.error.HTTPError) -> str:
+    hint = {401: "API key sai hoặc đã bị thu hồi, kiểm tra lại trong Cài đặt", 404: "TMDB không tìm thấy dữ liệu",
+            429: "Gọi TMDB quá nhiều, thử lại sau ít phút"}
+    return f"TMDB báo lỗi {e.code}: {hint.get(e.code, 'lỗi không rõ')}"
 
 
 def redact_args(args: list) -> list:
@@ -930,6 +1047,7 @@ class Api:
         self._sig = None
         self._sig_checked = 0.0
         self._follow_lock = threading.Lock()
+        self._movies_lock = threading.Lock()
         self._app_update = {}  # bản app mới hơn trên GitHub (nếu có)
         self._app_checked = 0.0
         self._window = None
@@ -1359,7 +1477,7 @@ class Api:
             warnings.append("Không thấy Node.js. Douyin và Zhihu cần Node.js để tính chữ ký: https://nodejs.org")
         return {
             "form": form, "data_dir": self._data_dir(),
-            "warnings": warnings, "repo": APP_REPO, "login": self.get_login(), "gemini": self.get_gemini(),
+            "warnings": warnings, "repo": APP_REPO, "login": self.get_login(), "gemini": self.get_gemini(), "tmdb": self.get_tmdb(),
             "app_version": APP_VERSION, "can_self_update": bool(getattr(sys, "frozen", False)),
             "ai_topic": clean_topic(self._settings.get("ai_topic")),
         }
@@ -1448,6 +1566,51 @@ class Api:
         self._settings["gemini"] = gemini
         save_settings(self._settings)
         return self.get_gemini()
+
+    # --- Lịch phim (TMDB) ---
+    def _tmdb_key(self) -> str:
+        blob = (self._settings.get("tmdb") or {}).get("key")
+        try:
+            return decrypt_token(blob) if blob else ""
+        except (OSError, ValueError):
+            return ""
+
+    def get_tmdb(self) -> dict:
+        return {"has_key": bool(self._tmdb_key())}
+
+    def set_tmdb(self, key=None, clear=False) -> dict:
+        tmdb = dict(self._settings.get("tmdb") or {})
+        if clear:
+            tmdb.pop("key", None)
+        elif key and str(key).strip():
+            tmdb["key"] = encrypt_token(str(key).strip())
+        self._settings["tmdb"] = tmdb
+        save_settings(self._settings)
+        MOVIES_FILE.unlink(missing_ok=True)  # đổi key thì lấy lại lịch từ đầu
+        return self.get_tmdb()
+
+    def movies(self, refresh=False) -> dict:
+        """Lịch phim từ cache; cache cũ hơn MOVIES_MAX_AGE (hoặc bấm tải lại) thì lấy mới từ TMDB."""
+        key = self._tmdb_key()
+        result = {"has_key": bool(key), "items": [], "fetched_at": 0,
+                  "streamers": {name: info["vn"] for name, info in STREAMERS.items()}}
+        if not key:
+            return result
+        with self._movies_lock:
+            try:
+                cache = json.loads(MOVIES_FILE.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                cache = {}
+            if refresh or time.time() - cache.get("fetched_at", 0) > MOVIES_MAX_AGE:
+                try:
+                    cache = {"fetched_at": int(time.time()), "items": fetch_movie_calendar(key, date.today())}
+                    MOVIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    MOVIES_FILE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+                except urllib.error.HTTPError as e:
+                    result["error"] = tmdb_error(e)
+                except (urllib.error.URLError, OSError, ValueError) as e:
+                    result["error"] = f"Không tải được lịch phim từ TMDB: {e}"
+        return {**result, "items": cache.get("items", []), "fetched_at": cache.get("fetched_at", 0)}
 
     def suggest_keywords(self, topic, count=12, platforms=None) -> dict:
         topic = clean_topic(topic)

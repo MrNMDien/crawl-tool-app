@@ -782,9 +782,11 @@ def test_supabase_sync():
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import urlparse, parse_qs
 
-    db = {}  # key -> row (1 tài khoản)
-    account = {"password": "pw"}
-    tokens = {"n": 0, "valid": set()}  # mỗi lần đăng nhập có refresh token riêng, dùng 1 lần là đổi
+    accounts = {"a@b.c": {"password": "pw", "id": "u1"}, "x@y.z": {"password": "pw2", "id": "u2"}}
+    account = accounts["a@b.c"]
+    rows = {"u1": {}, "u2": {}}  # như RLS: mỗi tài khoản một tập dòng riêng
+    db = rows["u1"]
+    tokens = {"n": 0, "valid": {}}  # refresh token -> tài khoản; mỗi lần đăng nhập 1 token riêng, dùng 1 lần là đổi
     calls = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -799,18 +801,23 @@ def test_supabase_sync():
             self.end_headers()
             self.wfile.write(data)
 
+        def uid(self):
+            auth = self.headers.get("Authorization", "")
+            return auth[len("Bearer at-"):] if auth.startswith("Bearer at-") else None
+
         def do_PUT(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if self.path != "/auth/v1/user" or self.headers.get("Authorization") != "Bearer at":
+            uid = self.uid()
+            if self.path != "/auth/v1/user" or not uid:
                 return self.reply(401, {"message": "no auth"})
-            account["password"] = body["password"]
-            self.reply(200, {"id": "u1"})
+            next(a for a in accounts.values() if a["id"] == uid)["password"] = body["password"]
+            self.reply(200, {"id": uid})
 
         def do_GET(self):
             calls.append(("GET", self.path))
-            if self.headers.get("apikey") != "pk" or not self.headers.get("Authorization", "").startswith("Bearer at"):
+            if self.headers.get("apikey") != "pk" or not self.uid():
                 return self.reply(401, {"message": "no auth"})
-            self.reply(200, list(db.values()))
+            self.reply(200, list(rows[self.uid()].values()))
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -820,17 +827,23 @@ def test_supabase_sync():
                 return self.reply(401, {"message": "Invalid API key"})
             if url.path == "/auth/v1/token":
                 grant = parse_qs(url.query)["grant_type"][0]
-                if grant == "password" and (body["email"], body["password"]) != ("a@b.c", account["password"]):
-                    return self.reply(400, {"error_description": "Invalid login credentials"})
-                if grant == "refresh_token":
-                    if body["refresh_token"] not in tokens["valid"]:
+                if grant == "password":
+                    acc = accounts.get(body["email"])
+                    if not acc or acc["password"] != body["password"]:
+                        return self.reply(400, {"error_description": "Invalid login credentials"})
+                    uid = acc["id"]
+                else:
+                    uid = tokens["valid"].pop(body["refresh_token"], None)
+                    if not uid:
                         return self.reply(400, {"error_description": "Invalid Refresh Token"})
-                    tokens["valid"].discard(body["refresh_token"])
                 tokens["n"] += 1
-                tokens["valid"].add(f"rt{tokens['n']}")
-                return self.reply(200, {"access_token": "at", "refresh_token": f"rt{tokens['n']}", "expires_in": 3600})
-            for row in body:  # upsert theo (user, key)
-                db[row["key"]] = row
+                tokens["valid"][f"rt{tokens['n']}"] = uid
+                return self.reply(200, {"access_token": f"at-{uid}", "refresh_token": f"rt{tokens['n']}",
+                                        "expires_in": 3600, "user": {"id": uid}})
+            if not self.uid():
+                return self.reply(401, {"message": "no auth"})
+            for row in body:  # upsert theo (user, key): ghi vào đúng tài khoản trong token
+                rows[self.uid()][row["key"]] = row
             self.reply(201)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -856,7 +869,7 @@ def test_supabase_sync():
             res = a.sync_login("a@b.c", "pw")
             assert res["logged_in"] and not res["problem"], res
             saved = a._settings["sync"]
-            assert set(saved) == {"email", "refresh", "last_sync", "error"}  # không lưu mật khẩu
+            assert set(saved) == {"email", "user_id", "refresh", "last_sync", "error"}  # không lưu mật khẩu
             assert not saved["refresh"].startswith("rt") and ct.decrypt_token(saved["refresh"]).startswith("rt")  # token mã hóa
             assert list(db) == ["dy_MS4wLjABAAAAkenhA"]
 
@@ -895,7 +908,7 @@ def test_supabase_sync():
             a._sync_access = None
             assert not a.sync_now()["problem"]  # dùng được refresh token mới vừa lưu
             # phiên của B bị thu hồi (vd. đổi mật khẩu): báo đăng nhập lại
-            tokens["valid"].discard(ct.decrypt_token(b._settings["sync"]["refresh"]))
+            tokens["valid"].pop(ct.decrypt_token(b._settings["sync"]["refresh"]))
             b._sync_access = None
             res = b.sync_now()
             assert not res["logged_in"] and "đăng nhập lại" in res["problem"]
@@ -908,6 +921,20 @@ def test_supabase_sync():
             assert b.sync_login("a@b.c", "matkhaumoi1")["logged_in"]
             assert not a.sync_logout()["logged_in"]
             assert a.sync_change_password("matkhaumoi1", "khac12345")["error"]  # đã đăng xuất
+
+            # cùng máy A, người khác đăng nhập: không thấy và không nhận nhầm kênh của tài khoản trước
+            mine = sorted(ct.load_follows(a._data_dir()))
+            assert mine and not rows["u2"]
+            res = a.sync_login("x@y.z", "pw2")
+            assert res["logged_in"] and not res["problem"]
+            assert a.follows()["channels"] == [] and rows["u2"] == {}  # không đẩy kênh của u1 sang u2
+            a.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhX", "Kênh của X")
+            assert list(rows["u2"]) == ["dy_MS4wLjABAAAAkenhX"] and "dy_MS4wLjABAAAAkenhX" not in rows["u1"]
+            assert list(Path(a._data_dir()).glob("follows.u1.bak.json"))  # danh sách cũ được cất, không xóa
+            # người cũ đăng nhập lại: lấy lại đúng kênh của mình từ máy chủ, không thấy kênh của X
+            a.sync_logout()
+            a.sync_login("a@b.c", "matkhaumoi1")
+            assert sorted(ct.load_follows(a._data_dir())) == mine
     finally:
         ct.save_settings, ct.Api._sync_soon, ct.SUPABASE = old
         server.shutdown()

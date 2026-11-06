@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.6.2"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.6.3"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -1769,8 +1769,21 @@ class Api:
             return {"error": f"Đăng nhập thất bại: {supabase_error(e)}"}
         except (urllib.error.URLError, OSError, ValueError) as e:
             return {"error": f"Không kết nối được máy chủ đồng bộ: {e}"}
+        user_id = str((data.get("user") or {}).get("id") or "")
+        old = self._sync_cfg()
+        # đổi sang tài khoản khác trên cùng máy: cất danh sách kênh của tài khoản cũ đi (đã có trên máy chủ),
+        # để không gộp nhầm kênh của người trước vào tài khoản mới
+        same = user_id == old["user_id"] if old.get("user_id") and user_id else             str(old.get("email", "")).lower() in ("", email.lower())
+        if not same:
+            with self._follow_lock:
+                data_dir = self._data_dir()
+                tag = re.sub(r"\W", "_", old.get("user_id") or old.get("email") or "cu")[:40]
+                for path in (follows_file(data_dir), deleted_file(data_dir)):
+                    if path.exists():
+                        path.replace(path.with_name(f"{path.stem}.{tag}.bak.json"))
+            self._write(f"Đổi tài khoản: đã cất danh sách kênh của tài khoản trước ({old.get('email', '')}).")
         with self._sync_lock:
-            self._settings["sync"] = {"email": email, "refresh": encrypt_token(data["refresh_token"]),
+            self._settings["sync"] = {"email": email, "user_id": user_id, "refresh": encrypt_token(data["refresh_token"]),
                                       "last_sync": 0, "error": ""}
             self._sync_access = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 120)
             save_settings(self._settings)

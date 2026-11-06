@@ -311,12 +311,15 @@ def test_follow_check_end_to_end():
             "with open(out / 'creator_contents_2026-11-04.jsonl', 'a', encoding='utf-8') as f:",
             "    for i in ids:",
             "        f.write(json.dumps({'aweme_id': i, 'title': 'Tập ' + i, 'aweme_url': 'https://www.douyin.com/video/' + i,",
-            "                            'source_creator': creator, 'last_modify_ts': int(time.time() * 1000)}) + '\\n')",
+            "                            'source_creator': creator, 'last_modify_ts': int(time.time() * 1000),",
+            "                            'creator_avatar': 'https://p3.douyinpic.com/ava' + str(rnd) + '.jpeg'}) + '\\n')",
             "print('creator mode', creator)",
         ]), encoding="utf-8")
         sent = []
-        old = ct.BASE_DIR, ct.uv_path, ct.save_settings, ct.telegram_call, ct.download_thumb
+        old = ct.BASE_DIR, ct.uv_path, ct.save_settings, ct.telegram_call, ct.download_thumb, ct.fetch_image
         ct.BASE_DIR, ct.uv_path = base, lambda: sys.executable
+        fetched = []
+        ct.fetch_image = lambda url, referer: fetched.append(url) or b"\xff\xd8\xff" + url.encode()  # ảnh JPEG giả
         ct.save_settings = lambda settings: None
         ct.telegram_call = lambda token, method, params: sent.append((method, params)) or {}
         ct.download_thumb = lambda item, data_dir: None
@@ -341,18 +344,22 @@ def test_follow_check_end_to_end():
 
             run_check()  # lần đầu: ghi nhận video 1, 2
             assert api.follows()["channels"][0]["new"] == [] and sent == []
+            # ảnh đại diện kênh: lấy từ lần kiểm tra, lưu file trên máy, giao diện nhận data URI
+            assert fetched == ["https://p3.douyinpic.com/ava0.jpeg"]
+            assert api.follows()["channels"][0]["avatar"].startswith("data:image/jpeg;base64,")
             assert "--type creator" in " ".join(api._lines) and "--crawler_max_notes_count 18" in " ".join(api._lines)
             counter.write_text("1")
             time.sleep(1.1)  # lần sau ghi dòng mới có last_modify_ts mới hơn
             run_check()  # video 3 mới
             follow = api.follows()
+            assert fetched[-1] == "https://p3.douyinpic.com/ava1.jpeg"  # kênh đổi ảnh: tải lại
             assert follow["channels"][0]["new"] == ["3"]
             assert sent and sent[0][0] == "sendMessage" and sent[0][1]["chat_id"] == "42" and "Tập 3" in sent[0][1]["text"]
             assert api.mark_seen()["channels"][0]["new"] == []
             assert api.set_follow_settings(None, 5)["error"] and api.set_follow_settings(False, 12)["settings"]["hours"] == 12
             assert api.unfollow(follow["channels"][0]["key"])["channels"] == []
         finally:
-            ct.BASE_DIR, ct.uv_path, ct.save_settings, ct.telegram_call, ct.download_thumb = old
+            ct.BASE_DIR, ct.uv_path, ct.save_settings, ct.telegram_call, ct.download_thumb, ct.fetch_image = old
 
 
 def test_login_button_flow():
@@ -940,10 +947,39 @@ def test_supabase_sync():
         server.shutdown()
 
 
+def test_channel_tags_and_stale():
+    """Tag phân loại do người dùng gắn; "Lâu chưa update" tự tính từ video mới nhất của kênh (> 5 ngày)."""
+    now = int(time.time())
+    channels = {"dy_a": {"url": "A", "known": [], "new": []}, "dy_b": {"url": "B", "known": [], "new": []}}
+    ct.apply_check(channels, {"A": {"1": {"published": now - 7 * 86400}, "2": {"published": now - 6 * 86400}},
+                              "B": {"3": {"published": now - 3600}}}, now)
+    assert channels["dy_a"]["last_video_at"] == now - 6 * 86400 and channels["dy_b"]["last_video_at"] == now - 3600
+    ct.apply_check(channels, {"A": {"9": {"published": 0}}}, now)  # không đọc được giờ đăng: giữ mốc cũ
+    assert channels["dy_a"]["last_video_at"] == now - 6 * 86400
+
+    old_save = ct.save_settings
+    ct.save_settings = lambda settings: None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            api = ct.Api()
+            api._settings = {"data_dir": tmp}
+            ct.write_follows(tmp, {**channels, "dy_c": {"url": "C", "name": "C", "platform": "dy"}})
+            by_key = {c["key"]: c for c in api.follows()["channels"]}
+            assert by_key["dy_a"]["stale"] and not by_key["dy_b"]["stale"]
+            assert not by_key["dy_c"]["stale"]  # chưa kiểm tra lần nào thì không kết luận
+            res = api.set_channel_tags("dy_a", ["da_lam", "la", "tiem_nang", "da_lam"])
+            assert {c["key"]: c["tags"] for c in res["channels"]}["dy_a"] == ["tiem_nang", "da_lam"]
+            assert res["tags"]["het_series"] == "Hết series" and res["stale_days"] == 5
+            assert ct.load_follows(tmp)["dy_a"]["updated"]  # đổi tag cũng được đồng bộ
+    finally:
+        ct.save_settings = old_save
+
+
 if __name__ == "__main__":
     test_movie_calendar()
     test_bundled_supabase()
     test_supabase_sync()
+    test_channel_tags_and_stale()
     test_build_args()
     test_build_jobs()
     test_login_settings()

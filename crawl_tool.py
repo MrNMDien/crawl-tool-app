@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.6.3"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.7.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -834,6 +834,10 @@ FOLLOW_PLATFORMS = {"dy"}
 FOLLOW_MAX_VIDEOS = 18  # đúng 1 trang danh sách video của kênh Douyin: đủ để thấy video mới
 FOLLOW_HOURS = (1, 3, 6, 12, 24)
 DEFAULT_FOLLOW_SETTINGS = {"auto": True, "hours": 6, "last_check": 0}
+# Tag phân loại kênh do người dùng gắn (mã -> nhãn). "Lâu chưa update" là tag tự động, không lưu.
+CHANNEL_TAGS = {"tiem_nang": "Tiềm năng", "chua_lam": "Chưa làm", "da_lam": "Đã làm",
+                "het_series": "Hết series", "ngung_lam": "Ngưng làm"}
+STALE_DAYS = 5  # kênh không đăng video mới quá số ngày này thì gắn "Lâu chưa update"
 
 
 def follows_file(data_dir: str) -> Path:
@@ -996,8 +1000,9 @@ def parse_channel(text: str, resolve=resolve_short_url) -> tuple:
     raise ValueError("Chưa nhận ra link kênh. Dán link dạng https://www.douyin.com/user/... hoặc link chia sẻ trang kênh từ app Douyin.")
 
 
-def collect_channel_videos(data_dir: str, since_ms: int) -> dict:
-    """Video lấy được ở lần kiểm tra vừa rồi, gom theo link kênh: {link kênh: {ID video: item}}."""
+def collect_channel_videos(data_dir: str, since_ms: int, avatars: dict = None) -> dict:
+    """Video lấy được ở lần kiểm tra vừa rồi, gom theo link kênh: {link kênh: {ID video: item}}.
+    avatars (nếu truyền vào) được điền {link kênh: link ảnh đại diện}."""
     found = {}
     for path in (Path(data_dir) / "douyin" / "jsonl").glob("creator_contents_*.jsonl"):
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -1011,7 +1016,26 @@ def collect_channel_videos(data_dir: str, since_ms: int) -> dict:
                 item = normalize("dy", row)
                 if item:
                     found.setdefault(row["source_creator"], {})[str(row.get("aweme_id"))] = item
+                if avatars is not None and str(row.get("creator_avatar", "")).startswith("https://"):
+                    avatars[row["source_creator"]] = row["creator_avatar"]
     return found
+
+
+def avatar_file(data_dir: str, key: str) -> Path:
+    return Path(data_dir) / "thumbs" / f"avatar_{safe_key(key)}.img"
+
+
+def save_avatar(data_dir: str, key: str, url: str) -> bool:
+    """Tải ảnh đại diện kênh về máy (ghi đè ảnh cũ). Link ảnh Douyin có hạn dùng nên phải lưu file."""
+    data = fetch_image(url, THUMB_REFERER["dy"])
+    if data is None:
+        return False
+    path = avatar_file(data_dir, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".part")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+    return True
 
 
 def apply_check(channels: dict, videos_by_channel: dict, now: int) -> dict:
@@ -1033,6 +1057,9 @@ def apply_check(channels: dict, videos_by_channel: dict, now: int) -> dict:
             found[key] = [videos[vid] for vid in new_ids]
         channel["known"] = list(known | set(videos))[-3000:]
         channel["checked_at"] = now
+        latest = max((v.get("published", 0) for v in videos.values()), default=0)
+        if latest:
+            channel["last_video_at"] = latest
     return found
 
 
@@ -1210,6 +1237,7 @@ class Api:
         self._follow_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._sync_access = None  # (access token, hết hạn lúc) của Supabase, chỉ giữ trong bộ nhớ
+        self._avatar_pending = set()  # kênh đang tải ảnh đại diện (máy khác đồng bộ sang, chưa có file)
         self._movies_lock = threading.Lock()
         self._app_update = {}  # bản app mới hơn trên GitHub (nếu có)
         self._app_checked = 0.0
@@ -1422,8 +1450,17 @@ class Api:
                 self._write(f"[LỖI] [Theo dõi] Crawler dừng với mã {code}; kênh nào đã lấy được vẫn được so sánh.")
             with self._follow_lock:
                 all_channels = load_follows(data_dir)
-                found = apply_check(all_channels, collect_channel_videos(data_dir, started_ms), int(time.time()))
+                avatars = {}
+                found = apply_check(all_channels, collect_channel_videos(data_dir, started_ms, avatars), int(time.time()))
+                changed_avatars = []
+                for key, channel in all_channels.items():
+                    url = avatars.get(channel["url"])
+                    if url and (url != channel.get("avatar") or not avatar_file(data_dir, key).exists()):
+                        channel["avatar"] = url
+                        changed_avatars.append((key, url))
                 write_follows(data_dir, all_channels)
+            for key, url in changed_avatars:
+                save_avatar(data_dir, key, url)
             total = sum(len(v) for v in found.values())
             self._write(f"Có {total} video mới từ kênh theo dõi." if total else "Kênh theo dõi chưa có video mới.")
             if found:
@@ -1457,6 +1494,22 @@ class Api:
             if settings["auto"] and due and self._state == "idle" and channels:
                 self.check_follows()
 
+    def _avatar(self, key: str, channel: dict) -> str:
+        """Ảnh đại diện kênh dạng data URI. Chưa có file mà có link (vd. đồng bộ từ máy khác) thì tải nền."""
+        data_dir = self._data_dir()
+        path = avatar_file(data_dir, key)
+        if path.exists():
+            return thumb_data_uri(path)
+        url = channel.get("avatar", "")
+        if url and key not in self._avatar_pending:
+            self._avatar_pending.add(key)
+
+            def fetch():
+                if save_avatar(data_dir, key, url):
+                    self._lib_rev += 1
+            threading.Thread(target=fetch, daemon=True).start()
+        return ""
+
     def follows(self) -> dict:
         channels = load_follows(self._data_dir())
         tg = self._settings.get("telegram") or {}
@@ -1464,14 +1517,19 @@ class Api:
         return {
             "channels": [{"key": k, "platform": c.get("platform"), "url": c["url"], "name": c.get("name", ""),
                           "added_at": c.get("added_at", 0), "checked_at": c.get("checked_at", 0),
-                          "new": c.get("new", [])} for k, c in channels.items()],
+                          "new": c.get("new", []), "last_new_at": c.get("last_new_at", 0),
+                          "tags": [t for t in c.get("tags", []) if t in CHANNEL_TAGS],
+                          "last_video_at": c.get("last_video_at", 0),
+                          "stale": bool(c.get("last_video_at")) and time.time() - c["last_video_at"] > STALE_DAYS * 86400,
+                          "avatar": self._avatar(k, c)} for k, c in channels.items()],
             "settings": {**settings, "next_check": settings["last_check"] + settings["hours"] * 3600},
             "telegram": {"has_token": bool(tg.get("token")), "chat_id": tg.get("chat_id", ""),
                          "chat_name": tg.get("chat_name", ""), "enabled": tg.get("enabled", True)},
             "hours_options": list(FOLLOW_HOURS),
+            "tags": CHANNEL_TAGS, "stale_days": STALE_DAYS,
         }
 
-    def follow_channel(self, text, name="") -> dict:
+    def follow_channel(self, text, name="", avatar="") -> dict:
         try:
             platform, url, channel_id = parse_channel(text)
         except ValueError as e:
@@ -1483,6 +1541,8 @@ class Api:
                 return {"error": "Kênh này đã có trong danh sách theo dõi"}
             channels[key] = {"platform": platform, "url": url, "name": str(name or "").strip()[:60] or f"Kênh Douyin …{channel_id[-6:]}",
                              "added_at": int(time.time()), "known": [], "new": []}
+            if str(avatar or "").startswith("https://"):  # theo dõi từ kết quả tìm kênh: có sẵn ảnh đại diện
+                channels[key]["avatar"] = str(avatar)
             write_follows(self._data_dir(), channels)
         self._sync_soon()
         return self.follows()
@@ -1518,6 +1578,7 @@ class Api:
                 avatars = list(pool.map(lambda r: fetch_image(r["avatar"], THUMB_REFERER["dy"]), results))
             for result, avatar in zip(results, avatars):
                 result["followed"] = result["url"] in followed
+                result["avatar_url"] = result["avatar"]  # link gốc, để lưu ảnh đại diện khi bấm Theo dõi
                 result["avatar"] = f"data:{image_mime(avatar)};base64,{base64.b64encode(avatar).decode()}" if avatar else ""
             self._write(f"Tìm thấy {len(results)} kênh.")
             return {"results": results}
@@ -1540,6 +1601,16 @@ class Api:
             channels = load_follows(self._data_dir())
             if key in channels and str(name or "").strip():
                 channels[key]["name"] = str(name).strip()[:60]
+                write_follows(self._data_dir(), channels)
+        self._sync_soon()
+        return self.follows()
+
+    def set_channel_tags(self, key, tags) -> dict:
+        tags = [t for t in CHANNEL_TAGS if t in (tags or [])]  # giữ thứ tự cố định, bỏ mã lạ
+        with self._follow_lock:
+            channels = load_follows(self._data_dir())
+            if key in channels:
+                channels[key]["tags"] = tags
                 write_follows(self._data_dir(), channels)
         self._sync_soon()
         return self.follows()

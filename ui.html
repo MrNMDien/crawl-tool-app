@@ -249,7 +249,48 @@
   .setting code { font: 12.5px Consolas, monospace; background: var(--hover); padding: 2px 6px; border-radius: 5px; word-break: break-all; }
   .setting .acts { display: flex; gap: 8px; flex: none; }
   .setting.col { flex-direction: column; align-items: stretch; gap: 14px; }
-  .channel-list { display: flex; flex-direction: column; gap: 8px; }
+  .follow-main > .fl-home, .follow-main > .fl-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .follow-main > [hidden] { display: none; }
+  .fl-gallery { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .ch-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px;
+    background: var(--panel); cursor: pointer; text-align: left; color: var(--text); font: inherit; min-width: 0; }
+  .ch-card:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .ch-card.has-new { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .ch-card .info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .ch-card .info b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ch-card .info span { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ch-card .chip.new { flex: none; }
+  .ch-ava { width: 48px; height: 48px; border-radius: 50%; flex: none; object-fit: cover; display: grid; place-items: center;
+    font-weight: 700; font-size: 18px; color: #fff; background: var(--hover); overflow: hidden; }
+  .ch-ava.lg { width: 56px; height: 56px; font-size: 21px; }
+  .ch-ava svg { width: 22px; height: 22px; }
+  .ch-card.all .ch-ava { background: var(--accent-soft); color: var(--accent); }
+  .ch-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; flex: none; }
+  .ch-head .info { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 3px; }
+  .ch-head .info b { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ch-head .info input { height: 32px; font-size: 15px; }
+  .ch-head .info span { font-size: 12.5px; color: var(--muted); }
+  .ch-head .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .fl-empty { grid-column: 1 / -1; }
+  .ch-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ch-tags:empty { display: none; }
+  .tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; border: 1px solid transparent; white-space: nowrap; }
+  .tag-tiem_nang { background: color-mix(in srgb, #e5a000 18%, transparent); color: #c98a00; }
+  .tag-chua_lam { background: color-mix(in srgb, #3b82f6 16%, transparent); color: #3b74e0; }
+  .tag-da_lam { background: color-mix(in srgb, #23955f 16%, transparent); color: #23955f; }
+  .tag-het_series { background: color-mix(in srgb, #8b5cf6 16%, transparent); color: #8257e6; }
+  .tag-ngung_lam { background: color-mix(in srgb, #8a8f98 18%, transparent); color: #7d838c; }
+  .tag-stale { background: color-mix(in srgb, #e5484d 15%, transparent); color: #e5484d; }
+  .fl-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); flex: none; }
+  .fl-tags button { border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 99px; padding: 3px 11px;
+    font-size: 12.5px; cursor: pointer; font-weight: 600; }
+  .fl-tags button small { font-weight: 500; opacity: .75; margin-left: 4px; }
+  .fl-tags button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .ch-head .tag-pick { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
+  .ch-head .tag-pick > span { font-size: 12px; color: var(--muted); margin-right: 2px; }
+  .tag-pick button { border: 1px dashed var(--border); background: none; border-radius: 99px; padding: 2px 10px; font-size: 12px; cursor: pointer; color: var(--muted); }
+  .tag-pick button.on { border-style: solid; }
   .user-results { display: flex; flex-direction: column; gap: 6px; max-height: 330px; overflow-y: auto; }
   .user-result { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; padding: 8px; border: 1px solid var(--border); border-radius: 10px; }
   .user-result .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: var(--hover); }
@@ -452,14 +493,28 @@
         </div>
         <div class="login-line">Thông báo: <b id="fl-tg">—</b> · <button class="link" id="fl-tg-settings" type="button">cài Telegram</button></div>
 
-        <div class="section-title">Kênh đang theo dõi (<span id="fl-count">0</span>)</div>
-        <div class="channel-list" id="fl-list"></div>
       </div>
       <div class="form-foot">
         <button class="btn primary lg" id="fl-check" type="button">Kiểm tra ngay</button>
       </div>
     </div>
-    <div class="card panel" id="follow-gallery"></div>
+    <div class="card panel follow-main">
+      <div class="fl-home" id="fl-home">
+        <div class="toolbar">
+          <h2>Kênh đang theo dõi</h2>
+          <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="text" id="fl-filter" placeholder="Tìm kênh..."></div>
+          <span class="total" id="fl-count"></span>
+          <div class="spacer"></div>
+          <button class="btn sm" id="fl-seen-all" type="button">Đánh dấu đã xem hết</button>
+        </div>
+        <div class="fl-tags" id="fl-tags"></div>
+        <div class="grid-wrap"><div class="ch-grid" id="fl-list"></div></div>
+      </div>
+      <div class="fl-detail" id="fl-detail" hidden>
+        <div class="ch-head" id="fl-head"></div>
+        <div class="fl-gallery" id="follow-gallery"></div>
+      </div>
+    </div>
   </section>
 
   <!-- ===== Tab Lịch phim (TMDB) ===== -->
@@ -691,7 +746,7 @@ function createGallery(root, mode) {
 
   const bar = el("div", "toolbar");
   const title = el("h2");
-  title.append(isLib ? "Thư viện" : isFollow ? "Video mới từ kênh theo dõi" : "Kết quả");
+  title.append(isLib ? "Thư viện" : isFollow ? "Video mới" : "Kết quả");
   const live = el("span", "live", "đang cập nhật");
   live.hidden = true;
   title.append(live);
@@ -720,7 +775,10 @@ function createGallery(root, mode) {
   bar.append(title, search, scope, fPlatform, fKeyword, fSort, fView, total, el("div", "spacer"));
   if (isFollow) {
     const seen = el("button", "btn sm", "Đánh dấu đã xem hết");
-    seen.onclick = async () => { renderFollows(await api().mark_seen(null)); toast("Đã đánh dấu đã xem"); };
+    seen.onclick = async () => {
+      renderFollows(await api().mark_seen(state.followKey && state.followKey !== "*" ? state.followKey : null));
+      toast("Đã đánh dấu đã xem");
+    };
     bar.append(seen);
   }
   bar.append(reload);
@@ -952,6 +1010,184 @@ async function loadData() {
 }
 
 // ---------- Theo dõi kênh ----------
+// Ảnh đại diện kênh; chưa có ảnh thì hiện chữ cái đầu trên nền màu của nền tảng
+function channelAvatar(c, big) {
+  if (c.avatar) {
+    const img = el("img", "ch-ava" + (big ? " lg" : ""));
+    img.src = c.avatar;
+    img.alt = "";
+    return img;
+  }
+  const ava = el("span", "ch-ava" + (big ? " lg" : ""), [...(c.name || "?").trim()][0] || "?");
+  ava.style.background = PLATFORMS[c.platform]?.color || "#666";
+  return ava;
+}
+const channelNewKeys = (c) => c.new.map((id) => `${c.platform}_${id}`);
+const staleText = (c) => `Lâu chưa update: video mới nhất ${Math.floor((Date.now() / 1000 - c.last_video_at) / 86400)} ngày trước`;
+function channelTags(c) {
+  const box = el("div", "ch-tags");
+  for (const t of c.tags) box.append(el("span", `tag tag-${t}`, state.follow.tags[t]));
+  if (c.stale) {
+    const s = el("span", "tag tag-stale", "Lâu chưa update");
+    s.title = staleText(c);
+    box.append(s);
+  }
+  return box;
+}
+// Lọc kênh theo tag: "" = tất cả, "stale" = lâu chưa update, "none" = chưa gắn tag
+const tagMatch = (c, t) => !t || (t === "stale" ? c.stale : t === "none" ? !c.tags.length : c.tags.includes(t));
+function renderTagFilter() {
+  const f = state.follow, cur = state.followTag || "";
+  const opts = [["", "Tất cả"], ...Object.entries(f.tags), ["stale", "Lâu chưa update"], ["none", "Chưa gắn tag"]];
+  $("fl-tags").replaceChildren(...opts.map(([t, label]) => {
+    const n = f.channels.filter((c) => tagMatch(c, t)).length;
+    const b = el("button", t === cur ? "on" : "", label);
+    b.type = "button";
+    b.append(el("small", "", String(n)));
+    if (t === "stale") b.title = `Không có video mới hơn ${f.stale_days} ngày (tính từ lần kiểm tra gần nhất)`;
+    b.onclick = () => { state.followTag = t; renderFollowHome(); };
+    return b;
+  }));
+  $("fl-tags").hidden = !f.channels.length;
+}
+const checkedText = (c) => c.checked_at ? `Kiểm tra lúc ${new Date(c.checked_at * 1000).toLocaleString("vi-VN")}` : "Chưa kiểm tra lần nào";
+
+// Màn hình đầu: lưới kênh. Kênh có video mới lên trước.
+function renderFollowHome() {
+  const f = state.follow;
+  const text = $("fl-filter").value.trim().toLowerCase();
+  renderTagFilter();
+  const channels = f.channels.filter((c) => (!text || c.name.toLowerCase().includes(text)) && tagMatch(c, state.followTag || ""))
+    .sort((a, b) => (b.new.length > 0) - (a.new.length > 0) || (b.last_new_at || 0) - (a.last_new_at || 0) || a.name.localeCompare(b.name));
+  const totalNew = f.channels.reduce((n, c) => n + c.new.length, 0);
+  $("fl-count").textContent = `${f.channels.length} kênh` + (totalNew ? ` · ${totalNew} video mới` : "");
+  $("fl-seen-all").hidden = !totalNew;
+  const cards = channels.map((c) => {
+    const card = el("button", "ch-card" + (c.new.length ? " has-new" : ""));
+    card.type = "button";
+    const info = el("div", "info");
+    info.append(el("b", "", c.name), el("span", "", c.new.length ? `${c.new.length} video mới · ${checkedText(c)}` : checkedText(c)),
+      channelTags(c));
+    info.title = c.name;
+    card.append(channelAvatar(c), info);
+    if (c.new.length) card.append(el("span", "chip new", `${c.new.length} mới`));
+    card.onclick = () => openFollowDetail(c.key);
+    return card;
+  });
+  if (f.channels.length && !text && !state.followTag) {
+    const all = el("button", "ch-card all" + (totalNew ? " has-new" : ""));
+    all.type = "button";
+    const ava = el("span", "ch-ava");
+    ava.innerHTML = ICON.video;
+    const info = el("div", "info");
+    info.append(el("b", "", "Tất cả video mới"), el("span", "", totalNew ? `${totalNew} video từ ${f.channels.filter((c) => c.new.length).length} kênh` : "Chưa có video mới"));
+    all.append(ava, info);
+    if (totalNew) all.append(el("span", "chip new", `${totalNew} mới`));
+    all.onclick = () => openFollowDetail("*");
+    cards.unshift(all);
+  }
+  if (!cards.length) {
+    const empty = el("div", "empty-state fl-empty");
+    empty.innerHTML = ICON.video;
+    const filtering = text || state.followTag;
+    empty.append(el("b", "", filtering ? "Không có kênh khớp" : "Chưa theo dõi kênh nào"),
+      el("span", "", filtering ? "Thử từ khóa hoặc tag khác." : "Tìm kênh theo tên hoặc dán link kênh Douyin ở cột bên trái."));
+    cards.push(empty);
+  }
+  $("fl-list").replaceChildren(...cards);
+}
+
+function openFollowDetail(key) {
+  state.followKey = key;
+  renderFollowDetail();
+}
+
+// Màn hình video mới của 1 kênh (hoặc "*" = tất cả kênh)
+function renderFollowDetail() {
+  const f = state.follow, key = state.followKey;
+  const c = key && key !== "*" ? f.channels.find((x) => x.key === key) : null;
+  if (!key || (key !== "*" && !c)) {  // chưa chọn, hoặc kênh vừa bị bỏ theo dõi
+    state.followKey = null;
+    $("fl-home").hidden = false;
+    $("fl-detail").hidden = true;
+    return;
+  }
+  $("fl-home").hidden = true;
+  $("fl-detail").hidden = false;
+  const keys = new Set(c ? channelNewKeys(c) : f.channels.flatMap(channelNewKeys));
+  followGallery.setItems((state.allItems || []).filter((i) => keys.has(i.key)));
+
+  const head = $("fl-head");
+  const back = el("button", "btn sm", "← Tất cả kênh");
+  back.onclick = () => openFollowDetail(null);
+  const info = el("div", "info");
+  if (!c) {
+    const ava = el("span", "ch-ava lg");
+    ava.innerHTML = ICON.video;
+    ava.style.cssText = "background: var(--accent-soft); color: var(--accent)";
+    info.append(el("b", "", "Tất cả video mới"), el("span", "", `${keys.size} video mới từ các kênh đang theo dõi`));
+    return head.replaceChildren(back, ava, info);
+  }
+  const nameEl = el("b", "", c.name);
+  nameEl.title = c.name;
+  info.append(nameEl, el("span", "", (c.new.length ? `${c.new.length} video mới · ` : "Chưa có video mới · ") + checkedText(c)));
+  const acts = el("div", "acts");
+  const open = el("button", "btn sm", "Mở kênh");
+  open.onclick = () => api().open_url(c.url);
+  const rename = el("button", "btn sm", "Đổi tên");
+  rename.onclick = () => {
+    // sửa tên ngay tại chỗ: Enter (hoặc bấm ra ngoài) để lưu, Esc để hủy
+    const input = el("input");
+    input.type = "text";
+    input.value = c.name;
+    input.maxLength = 60;
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      const name = input.value.trim();
+      if (save && name && name !== c.name) renderFollows(await api().rename_channel(c.key, name));
+      else input.replaceWith(nameEl);
+    };
+    input.onkeydown = (e) => { if (e.key === "Enter") finish(true); else if (e.key === "Escape") finish(false); };
+    input.onblur = () => finish(true);
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+  };
+  acts.append(open, rename);
+  if (c.new.length) {
+    const seen = el("button", "btn sm", "Đã xem");
+    seen.onclick = async () => renderFollows(await api().mark_seen(c.key));
+    acts.append(seen);
+  }
+  const del = el("button", "btn sm danger", "Bỏ theo dõi");
+  del.onclick = async () => {
+    if (await confirmBox(`Bỏ theo dõi ${c.name}?`, "App sẽ không kiểm tra kênh này nữa.")) renderFollows(await api().unfollow(c.key));
+  };
+  acts.append(del);
+  const pick = el("div", "tag-pick");
+  pick.append(el("span", "", "Phân loại:"));
+  for (const [t, label] of Object.entries(f.tags)) {
+    const on = c.tags.includes(t);
+    const b = el("button", on ? `on tag tag-${t}` : "", (on ? "✓ " : "+ ") + label);
+    b.type = "button";
+    b.onclick = async () => {
+      const tags = on ? c.tags.filter((x) => x !== t) : [...c.tags, t];
+      renderFollows(await api().set_channel_tags(c.key, tags));
+    };
+    pick.append(b);
+  }
+  if (c.stale) {
+    const s = el("span", "tag tag-stale", "Lâu chưa update");
+    s.title = staleText(c);
+    pick.append(s);
+  }
+  head.replaceChildren(back, channelAvatar(c, true), info, acts, pick);
+}
+$("fl-filter").oninput = () => renderFollowHome();
+$("fl-seen-all").onclick = async () => { renderFollows(await api().mark_seen(null)); toast("Đã đánh dấu đã xem"); };
+
 function renderFollows(f) {
   const before = state.follow ? state.follow.channels.reduce((n, c) => n + c.new.length, 0) : null;
   state.follow = f;
@@ -961,59 +1197,9 @@ function renderFollows(f) {
   $("follow-count").textContent = totalNew;
   $("follow-count").classList.toggle("new", totalNew > 0);
   if (before !== null && totalNew > before) toast(`Có ${totalNew - before} video mới từ kênh theo dõi`);
-  followGallery.setItems((state.allItems || []).filter((i) => newKeys.has(i.key)));
 
-  $("fl-count").textContent = f.channels.length;
-  const list = $("fl-list");
-  list.replaceChildren(...f.channels.map((c) => {
-    const box = el("div", "channel");
-    const top = el("div", "top");
-    const dot = el("span", "pdot");
-    dot.style.background = PLATFORMS[c.platform]?.color || "#666";
-    const nameEl = el("b", "", c.name);
-    nameEl.title = c.name;
-    top.append(dot, nameEl);
-    if (c.new.length) top.append(el("span", "chip new", `${c.new.length} mới`));
-    const sub = el("div", "sub", c.checked_at ? `Kiểm tra lúc ${new Date(c.checked_at * 1000).toLocaleString("vi-VN")}` : "Chưa kiểm tra lần nào");
-    const acts = el("div", "acts");
-    const open = el("button", "btn sm", "Mở kênh");
-    open.onclick = () => api().open_url(c.url);
-    const rename = el("button", "btn sm", "Đổi tên");
-    rename.onclick = () => {
-      // sửa tên ngay tại chỗ: Enter (hoặc bấm ra ngoài) để lưu, Esc để hủy
-      const input = el("input");
-      input.type = "text";
-      input.value = c.name;
-      input.maxLength = 60;
-      let done = false;
-      const finish = async (save) => {
-        if (done) return;
-        done = true;
-        const name = input.value.trim();
-        if (save && name && name !== c.name) renderFollows(await api().rename_channel(c.key, name));
-        else input.replaceWith(nameEl);
-      };
-      input.onkeydown = (e) => { if (e.key === "Enter") finish(true); else if (e.key === "Escape") finish(false); };
-      input.onblur = () => finish(true);
-      nameEl.replaceWith(input);
-      input.focus();
-      input.select();
-    };
-    acts.append(open, rename);
-    if (c.new.length) {
-      const seen = el("button", "btn sm", "Đã xem");
-      seen.onclick = async () => renderFollows(await api().mark_seen(c.key));
-      acts.append(seen);
-    }
-    const del = el("button", "btn sm danger", "Bỏ theo dõi");
-    del.onclick = async () => {
-      if (await confirmBox(`Bỏ theo dõi ${c.name}?`, "App sẽ không kiểm tra kênh này nữa.")) renderFollows(await api().unfollow(c.key));
-    };
-    acts.append(del);
-    box.append(top, sub, acts);
-    return box;
-  }));
-  if (!f.channels.length) list.append(el("div", "hint", "Chưa theo dõi kênh nào."));
+  renderFollowHome();
+  renderFollowDetail();
 
   const st = f.settings;
   $("fl-auto").checked = st.auto;
@@ -1052,7 +1238,7 @@ function renderUserResults(results) {
     const btn = el("button", "btn sm" + (u.followed ? "" : " primary"), u.followed ? "Đã theo dõi" : "Theo dõi");
     btn.disabled = u.followed;
     btn.onclick = async () => {
-      const res = await api().follow_channel(u.url, u.nickname);
+      const res = await api().follow_channel(u.url, u.nickname, u.avatar_url || "");
       if (res.error) return toast(res.error, true);
       u.followed = true;
       btn.textContent = "Đã theo dõi";

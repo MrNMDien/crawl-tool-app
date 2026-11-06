@@ -512,13 +512,10 @@
         <div><button class="link" id="tmdb-clear" type="button">Xóa key</button></div>
       </div>
       <div class="card setting col" id="sync-card">
-        <div class="head"><div class="info"><h3>Đồng bộ theo dõi (Supabase) <span class="chip" id="sync-status">chưa đăng nhập</span></h3>
-          <p>Đăng nhập cùng một tài khoản trên các máy: kênh theo dõi, tên kênh, video đã xem được đồng bộ, máy này vừa kiểm tra thì máy kia không kiểm tra lại (không báo Telegram 2 lần).
-          Lần đầu: chạy SQL tạo bảng (nút bên dưới) trong Supabase → SQL Editor, rồi tạo tài khoản ở Authentication → Users → Add user.</p></div></div>
+        <div class="head"><div class="info"><h3>Tài khoản đồng bộ <span class="chip" id="sync-status">chưa đăng nhập</span></h3>
+          <p>Đăng nhập cùng một tài khoản trên các máy: kênh theo dõi, tên kênh, video đã xem được đồng bộ, máy này vừa kiểm tra thì máy kia không kiểm tra lại (không báo Telegram 2 lần).</p></div></div>
         <div class="sync-form" id="sync-form">
-          <input type="text" id="sync-url" data-paste placeholder="Project URL (https://xxxx.supabase.co)" autocomplete="off">
-          <input type="password" id="sync-key" data-paste placeholder="Publishable key (hoặc anon key)" autocomplete="off">
-          <input type="text" id="sync-email" placeholder="Email tài khoản Supabase" autocomplete="off">
+          <input type="text" id="sync-email" placeholder="Email" autocomplete="off">
           <div class="tg-row"><input type="password" id="sync-pass" placeholder="Mật khẩu" autocomplete="off"><button class="btn primary" id="sync-login" type="button">Đăng nhập</button></div>
         </div>
         <div class="sync-info" id="sync-info" hidden>
@@ -527,7 +524,6 @@
           <button class="btn sm" id="sync-logout" type="button">Đăng xuất</button>
         </div>
         <p class="hint bad" id="sync-problem" hidden></p>
-        <div><button class="link" id="sync-sql" type="button">Copy SQL tạo bảng</button></div>
       </div>
       <div class="card setting">
         <div class="info"><h3>Thư mục kết quả</h3><p><code id="data-dir">—</code></p></div>
@@ -1478,11 +1474,10 @@ function renderSync(s) {
   const ok = s.logged_in && !s.problem;
   $("sync-status").textContent = !s.logged_in ? "chưa đăng nhập" : ok ? "đang đồng bộ" : "lỗi đồng bộ";
   $("sync-status").className = "chip" + (ok ? " ok" : "");
+  $("sync-card").hidden = !s.available;
   $("sync-form").hidden = s.logged_in;
   $("sync-info").hidden = !s.logged_in;
-  if (!$("sync-url").value) $("sync-url").value = s.url || "";
   if (!$("sync-email").value) $("sync-email").value = s.email || "";
-  $("sync-key").placeholder = s.has_key ? "Đã lưu key (dán key mới nếu muốn đổi)" : "Publishable key (hoặc anon key)";
   const who = $("sync-who");
   who.textContent = `${s.email} · ` + (s.last_sync ? `đồng bộ lúc ${new Date(s.last_sync * 1000).toLocaleString("vi-VN")}` : "chưa đồng bộ");
   $("sync-problem").textContent = s.problem;
@@ -1492,9 +1487,9 @@ $("sync-login").onclick = async () => {
   const btn = $("sync-login");
   btn.disabled = true;
   try {
-    const res = await api().sync_login($("sync-url").value, $("sync-key").value, $("sync-email").value, $("sync-pass").value);
+    const res = await api().sync_login($("sync-email").value, $("sync-pass").value);
     if (res.error) return toast(res.error, true);
-    $("sync-pass").value = $("sync-key").value = "";
+    $("sync-pass").value = "";
     renderSync(res);
     toast(res.problem ? res.problem : "Đã đăng nhập và đồng bộ kênh theo dõi", !!res.problem);
     loadData();
@@ -1508,8 +1503,7 @@ $("sync-now").onclick = async () => {
   toast(res.problem || "Đã đồng bộ", !!res.problem);
   loadData();
 };
-$("sync-logout").onclick = async () => { renderSync(await api().sync_logout()); toast("Đã đăng xuất Supabase trên máy này"); };
-$("sync-sql").onclick = () => { api().copy(state.sync?.sql || ""); toast("Đã copy SQL. Dán vào Supabase → SQL Editor → Run"); };
+$("sync-logout").onclick = async () => { renderSync(await api().sync_logout()); toast("Đã đăng xuất tài khoản đồng bộ trên máy này"); };
 
 function renderTmdb(t) {
   $("tmdb-status").textContent = t.has_key ? "đã có key" : "chưa có key";

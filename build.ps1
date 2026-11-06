@@ -12,6 +12,9 @@ git -C $base archive --format=zip --prefix=MediaCrawler/ -o (Join-Path $PSScript
 if ($LASTEXITCODE -ne 0) { Write-Host "Không gói được base code, dừng build."; exit 1 }
 [IO.File]::WriteAllText("$PSScriptRoot/base.sha", (git -C $base rev-parse HEAD).Trim())
 
+# Đồng bộ: project Supabase của chủ app (url + publishable key) gói vào exe, người dùng chỉ đăng nhập
+if (-not (Test-Path supabase.json)) { Write-Host "Thiếu supabase.json (url + publishable key), dừng build."; exit 1 }
+
 # Logo: logo.png (vuông) -> icon exe + ảnh nhỏ cho thanh tiêu đề trong app
 $icon = @()
 if (Test-Path logo.png) {
@@ -21,7 +24,7 @@ if (Test-Path logo.png) {
 }
 
 uvx --python 3.11 --from pyinstaller --with pywebview pyinstaller --noconfirm --clean --onefile --windowed `
-    --name CrawlTool --add-binary "$uv;." --add-data "ui.html;." --add-data "base.zip;." --add-data "base.sha;." --collect-all webview @icon crawl_tool.py
+    --name CrawlTool --add-binary "$uv;." --add-data "ui.html;." --add-data "base.zip;." --add-data "base.sha;." --add-data "supabase.json;." --collect-all webview @icon crawl_tool.py
 if ($LASTEXITCODE -ne 0) { Write-Host "PyInstaller lỗi, dừng build."; exit 1 }
 
 Write-Host "Xong: $PSScriptRoot\dist\CrawlTool.exe"

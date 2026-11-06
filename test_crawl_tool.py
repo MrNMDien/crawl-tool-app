@@ -762,8 +762,22 @@ def test_movie_calendar():
             ct.MOVIES_FILE, ct.fetch_movie_calendar, ct.SETTINGS_FILE = old_file, old_fetch, old_settings
 
 
+def test_bundled_supabase():
+    with tempfile.TemporaryDirectory() as tmp:
+        old = ct.__file__
+        ct.__file__ = str(Path(tmp) / "crawl_tool.py")
+        try:
+            assert ct.bundled_supabase() == {}
+            (Path(tmp) / "supabase.json").write_text('{"url": "http://x", "key": "k"}', encoding="utf-8")
+            assert ct.bundled_supabase() == {}  # chỉ nhận https
+            (Path(tmp) / "supabase.json").write_text('{"url": "https://x.supabase.co/", "key": "sb_publishable_1"}', encoding="utf-8")
+            assert ct.bundled_supabase() == {"url": "https://x.supabase.co", "key": "sb_publishable_1"}
+        finally:
+            ct.__file__ = old
+
+
 def test_supabase_sync():
-    """2 máy đăng nhập cùng tài khoản Supabase (server giả): theo dõi, đổi tên, bỏ theo dõi ở máy này thì máy kia thấy."""
+    """2 máy đăng nhập cùng tài khoản (Supabase giả, gói sẵn trong app): theo dõi, đổi tên, bỏ theo dõi ở máy này thì máy kia thấy."""
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import urlparse, parse_qs
@@ -814,7 +828,7 @@ def test_supabase_sync():
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_port}"
-    old = ct.save_settings, ct.Api._sync_soon, ct.re.fullmatch
+    old = ct.save_settings, ct.Api._sync_soon, ct.SUPABASE
     ct.save_settings = lambda settings: None
     ct.Api._sync_soon = lambda self: self._sync()  # chạy ngay để test không phải chờ luồng nền
     try:
@@ -825,19 +839,20 @@ def test_supabase_sync():
                 api._settings = {"data_dir": str(Path(tmp) / name)}
                 machines.append(api)
             a, b = machines
-            assert a.sync_login("http://x.supabase.co", "pk", "a@b.c", "pw")["error"].startswith("Project URL")
-            # server giả chạy http://127.0.0.1; bản thật bắt buộc https
-            real = old[2]
-            ct.re.fullmatch = lambda pat, text, *f: True if pat.startswith("https://") else real(pat, text, *f)
-            assert "Sai email" in a.sync_login(url, "pk", "a@b.c", "sai")["error"]
+            ct.SUPABASE = {}
+            assert not a.get_sync()["available"] and a.sync_login("a@b.c", "pw")["error"]  # bản không gói đồng bộ
+            ct.SUPABASE = {"url": url, "key": "pk"}
+            assert a.get_sync()["available"] and a.sync_login("a@b.c", "")["error"]
+            assert "Sai email" in a.sync_login("a@b.c", "sai")["error"]
             a.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhA", "Kênh A")  # có trước khi đăng nhập
-            res = a.sync_login(url, "pk", "a@b.c", "pw")
+            res = a.sync_login("a@b.c", "pw")
             assert res["logged_in"] and not res["problem"], res
-            assert '"pk"' not in json.dumps(a._settings)  # key lưu mã hóa
+            saved = a._settings["sync"]
+            assert set(saved) == {"email", "refresh", "last_sync", "error"}  # không lưu mật khẩu
+            assert not saved["refresh"].startswith("rt") and ct.decrypt_token(saved["refresh"]).startswith("rt")  # token mã hóa
             assert list(db) == ["dy_MS4wLjABAAAAkenhA"]
 
-            assert b.sync_login(url, "", "a@b.c", "pw")["error"]  # máy mới chưa lưu key thì phải dán key
-            b.sync_login(url, "pk", "a@b.c", "pw")
+            b.sync_login("a@b.c", "pw")
             assert [c["name"] for c in b.follows()["channels"]] == ["Kênh A"]
 
             b.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhB", "Kênh B")
@@ -878,12 +893,13 @@ def test_supabase_sync():
             assert not res["logged_in"] and "đăng nhập lại" in res["problem"]
             assert not a.sync_logout()["logged_in"]
     finally:
-        ct.save_settings, ct.Api._sync_soon, ct.re.fullmatch = old
+        ct.save_settings, ct.Api._sync_soon, ct.SUPABASE = old
         server.shutdown()
 
 
 if __name__ == "__main__":
     test_movie_calendar()
+    test_bundled_supabase()
     test_supabase_sync()
     test_build_args()
     test_build_jobs()

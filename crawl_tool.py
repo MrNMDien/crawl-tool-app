@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.6.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.6.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -887,22 +887,23 @@ def write_follows(data_dir: str, channels: dict, touch: bool = True) -> None:
 
 
 # ---------- Đồng bộ kênh theo dõi qua Supabase ----------
-# Mỗi máy đăng nhập cùng một tài khoản Supabase (email + mật khẩu). Bảng có RLS: tài khoản nào chỉ thấy dòng của mình.
+# Project Supabase của chủ app gói sẵn trong exe (supabase.json: url + publishable key, key này được phép công khai).
+# Người dùng chỉ đăng nhập bằng email + mật khẩu chủ app cấp. Bảng có RLS: tài khoản nào chỉ thấy dòng của mình.
+# Tạo bảng: supabase_setup.sql (chủ app chạy 1 lần).
 SYNC_EVERY = 300  # giây: kéo thay đổi từ máy khác khi app đang mở
-SYNC_SQL = """-- CrawlTool: bảng đồng bộ kênh theo dõi. Dán vào Supabase -> SQL Editor -> Run (chạy lại nhiều lần không sao).
-create table if not exists public.follows (
-  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
-  key text not null,
-  data jsonb not null default '{}'::jsonb,
-  deleted boolean not null default false,
-  updated bigint not null default 0,
-  primary key (user_id, key)
-);
-alter table public.follows enable row level security;
-drop policy if exists "crawltool_own_rows" on public.follows;
-create policy "crawltool_own_rows" on public.follows for all to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
-"""
+
+
+def bundled_supabase() -> dict:
+    root = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
+    try:
+        cfg = json.loads((root / "supabase.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    url, key = str(cfg.get("url", "")).rstrip("/"), str(cfg.get("key", ""))
+    return {"url": url, "key": key} if url.startswith("https://") and key else {}
+
+
+SUPABASE = bundled_supabase()
 
 
 def merge_follows(local: dict, deleted: dict, rows: list):
@@ -948,11 +949,11 @@ def supabase_error(e: urllib.error.HTTPError) -> str:
         data = {}
     msg = data.get("msg") or data.get("error_description") or data.get("message") or data.get("error") or f"HTTP {e.code}"
     if data.get("code") in ("PGRST205", "42P01") or "public.follows" in str(msg):
-        return "Chưa có bảng follows: bấm \"Copy SQL tạo bảng\" rồi chạy trong Supabase → SQL Editor"
+        return "Máy chủ đồng bộ chưa sẵn sàng (thiếu bảng follows), báo người quản trị"
     if "Invalid login credentials" in str(msg):
         return "Sai email hoặc mật khẩu"
     if "Invalid API key" in str(msg) or e.code == 401 and "apikey" in str(msg).lower():
-        return "Sai key của project (Project Settings → API Keys)"
+        return "Máy chủ đồng bộ từ chối kết nối, báo người quản trị"
     return str(msg)
 
 
@@ -1752,33 +1753,28 @@ class Api:
 
     def get_sync(self) -> dict:
         s = self._sync_cfg()
-        return {"url": s.get("url", ""), "has_key": bool(s.get("key")), "email": s.get("email", ""),
-                "logged_in": bool(s.get("refresh")), "last_sync": s.get("last_sync", 0), "problem": s.get("error", ""),
-                "sql": SYNC_SQL}
+        return {"available": bool(SUPABASE), "email": s.get("email", ""), "logged_in": bool(s.get("refresh")),
+                "last_sync": s.get("last_sync", 0), "problem": s.get("error", "")}
 
-    def sync_login(self, url, key, email, password) -> dict:
-        url = str(url or "").strip().rstrip("/")
-        key, email, password = str(key or "").strip(), str(email or "").strip(), str(password or "")
-        old = self._sync_cfg()
-        if not key and old.get("key") and old.get("url") == url:
-            key = decrypt_token(old["key"])  # đăng nhập lại: dùng key đã lưu
-        if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?", url):
-            return {"error": "Project URL có dạng https://xxxx.supabase.co"}
-        if not (key and email and password):
-            return {"error": "Điền đủ Project URL, key, email và mật khẩu"}
+    def sync_login(self, email, password) -> dict:
+        email, password = str(email or "").strip(), str(password or "")
+        if not SUPABASE:
+            return {"error": "Bản app này chưa có đồng bộ"}
+        if not (email and password):
+            return {"error": "Nhập email và mật khẩu"}
         try:
-            data = supabase_call(url, key, "/auth/v1/token?grant_type=password", "POST",
+            data = supabase_call(SUPABASE["url"], SUPABASE["key"], "/auth/v1/token?grant_type=password", "POST",
                                  {"email": email, "password": password})
         except urllib.error.HTTPError as e:
-            return {"error": f"Đăng nhập Supabase thất bại: {supabase_error(e)}"}
+            return {"error": f"Đăng nhập thất bại: {supabase_error(e)}"}
         except (urllib.error.URLError, OSError, ValueError) as e:
-            return {"error": f"Không kết nối được Supabase: {e}"}
+            return {"error": f"Không kết nối được máy chủ đồng bộ: {e}"}
         with self._sync_lock:
-            self._settings["sync"] = {"url": url, "key": encrypt_token(key), "email": email,
-                                      "refresh": encrypt_token(data["refresh_token"]), "last_sync": 0, "error": ""}
+            self._settings["sync"] = {"email": email, "refresh": encrypt_token(data["refresh_token"]),
+                                      "last_sync": 0, "error": ""}
             self._sync_access = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 120)
             save_settings(self._settings)
-        self._write(f"Đã đăng nhập Supabase ({email}), đang đồng bộ kênh theo dõi...")
+        self._write(f"Đã đăng nhập ({email}), đang đồng bộ kênh theo dõi...")
         self._sync()
         return self.get_sync()
 
@@ -1797,13 +1793,13 @@ class Api:
         return self.get_sync()
 
     def _sync_soon(self) -> None:
-        if self._sync_cfg().get("refresh"):
+        if SUPABASE and self._sync_cfg().get("refresh"):
             threading.Thread(target=self._sync, daemon=True).start()
 
-    def _sync_token(self, s: dict, key: str) -> str:
+    def _sync_token(self, s: dict) -> str:
         if self._sync_access and time.time() < self._sync_access[1]:
             return self._sync_access[0]
-        data = supabase_call(s["url"], key, "/auth/v1/token?grant_type=refresh_token", "POST",
+        data = supabase_call(SUPABASE["url"], SUPABASE["key"], "/auth/v1/token?grant_type=refresh_token", "POST",
                              {"refresh_token": decrypt_token(s["refresh"])})
         s["refresh"] = encrypt_token(data["refresh_token"])  # Supabase đổi refresh token mỗi lần dùng: phải lưu lại
         self._settings["sync"] = s
@@ -1813,7 +1809,7 @@ class Api:
 
     def _sync(self) -> None:
         """Kéo kênh từ Supabase, ghép với máy này, đẩy phần mới hơn lên. Lỗi chỉ ghi lại, không làm hỏng việc khác."""
-        if not self._sync_cfg().get("refresh"):
+        if not (SUPABASE and self._sync_cfg().get("refresh")):
             return
         with self._sync_lock:
             s = self._sync_cfg()
@@ -1822,10 +1818,10 @@ class Api:
             old_error = s.get("error", "")
             refreshing = not (self._sync_access and time.time() < self._sync_access[1])
             try:
-                key = decrypt_token(s["key"])
-                token = self._sync_token(s, key)
+                url, key = SUPABASE["url"], SUPABASE["key"]
+                token = self._sync_token(s)
                 refreshing = False
-                rows = supabase_call(s["url"], key, "/rest/v1/follows?select=key,data,deleted,updated", token=token)
+                rows = supabase_call(url, key, "/rest/v1/follows?select=key,data,deleted,updated", token=token)
                 with self._follow_lock:
                     data_dir = self._data_dir()
                     before = load_follows(data_dir)
@@ -1833,7 +1829,7 @@ class Api:
                     write_follows(data_dir, channels, touch=False)
                     write_json(deleted_file(data_dir), gone)
                 if push:
-                    supabase_call(s["url"], key, "/rest/v1/follows?on_conflict=user_id,key", "POST", push, token,
+                    supabase_call(url, key, "/rest/v1/follows?on_conflict=user_id,key", "POST", push, token,
                                   {"Prefer": "resolution=merge-duplicates,return=minimal"})
                 if channels != before:
                     self._lib_rev += 1
@@ -1842,11 +1838,11 @@ class Api:
                 msg = supabase_error(e)
                 if refreshing and e.code in (400, 401):
                     s.pop("refresh", None)  # phiên đăng nhập Supabase không còn dùng được
-                    msg = "Phiên đăng nhập Supabase đã hết, đăng nhập lại trong Cài đặt"
+                    msg = "Phiên đăng nhập đã hết, đăng nhập lại trong Cài đặt → Đồng bộ"
                 s["error"] = msg
-                self._write(f"[LỖI] Đồng bộ Supabase: {msg}")
+                self._write(f"[LỖI] Đồng bộ: {msg}")
             except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-                s["error"] = f"Không kết nối được Supabase: {e}"
+                s["error"] = f"Không kết nối được máy chủ đồng bộ: {e}"
             self._settings["sync"] = s
             save_settings(self._settings)
             if s.get("error", "") != old_error or not s.get("refresh"):

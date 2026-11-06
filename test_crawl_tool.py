@@ -971,6 +971,13 @@ def test_channel_tags_and_stale():
             assert {c["key"]: c["tags"] for c in res["channels"]}["dy_a"] == ["tiem_nang", "da_lam"]
             assert res["tags"]["het_series"] == "Hết series" and res["stale_days"] == 5
             assert ct.load_follows(tmp)["dy_a"]["updated"]  # đổi tag cũng được đồng bộ
+            # chọn nhiều kênh rồi gắn / bỏ tag một lần
+            res = api.tag_channels(["dy_a", "dy_b", "khong_co"], "het_series")
+            tags = {c["key"]: c["tags"] for c in res["channels"]}
+            assert tags["dy_a"] == ["tiem_nang", "da_lam", "het_series"] and tags["dy_b"] == ["het_series"] and tags["dy_c"] == []
+            tags = {c["key"]: c["tags"] for c in api.tag_channels(["dy_a", "dy_b"], "tiem_nang", False)["channels"]}
+            assert tags["dy_a"] == ["da_lam", "het_series"] and tags["dy_b"] == ["het_series"]
+            assert api.tag_channels(["dy_a"], "bua")["error"]
     finally:
         ct.save_settings = old_save
 

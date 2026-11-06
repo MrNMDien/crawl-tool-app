@@ -275,22 +275,40 @@
   .fl-empty { grid-column: 1 / -1; }
   .ch-tags { display: flex; flex-wrap: wrap; gap: 4px; }
   .ch-tags:empty { display: none; }
-  .tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; border: 1px solid transparent; white-space: nowrap; }
-  .tag-tiem_nang { background: color-mix(in srgb, #e5a000 18%, transparent); color: #c98a00; }
-  .tag-chua_lam { background: color-mix(in srgb, #3b82f6 16%, transparent); color: #3b74e0; }
-  .tag-da_lam { background: color-mix(in srgb, #23955f 16%, transparent); color: #23955f; }
-  .tag-het_series { background: color-mix(in srgb, #8b5cf6 16%, transparent); color: #8257e6; }
-  .tag-ngung_lam { background: color-mix(in srgb, #8a8f98 18%, transparent); color: #7d838c; }
-  .tag-stale { background: color-mix(in srgb, #e5484d 15%, transparent); color: #e5484d; }
+  .tag[class*="tag-"] { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; border: 1px solid transparent; white-space: nowrap; }
+  /* mỗi tag một màu (--tc), dùng chung cho nhãn trên thẻ kênh, hàng lọc, nút gắn tag */
+  .tag-tiem_nang { --tc: #d99a00; }
+  .tag-chua_lam { --tc: #3b74e0; }
+  .tag-da_lam { --tc: #23955f; }
+  .tag-het_series { --tc: #8257e6; }
+  .tag-ngung_lam { --tc: #7d838c; }
+  .tag-stale { --tc: #e5484d; }
+  .tag[class*="tag-"] { background: color-mix(in srgb, var(--tc) 16%, transparent); color: var(--tc); }
   .fl-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); flex: none; }
   .fl-tags button { border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 99px; padding: 3px 11px;
     font-size: 12.5px; cursor: pointer; font-weight: 600; }
   .fl-tags button small { font-weight: 500; opacity: .75; margin-left: 4px; }
   .fl-tags button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .fl-tags button[class*="tag-"], .tag-pick button[class*="tag-"], .fl-bulk button[class*="tag-"] {
+    color: var(--tc); border-color: color-mix(in srgb, var(--tc) 45%, var(--border)); }
+  .fl-tags button[class*="tag-"].on, .tag-pick button[class*="tag-"].on, .fl-bulk button[class*="tag-"].on {
+    background: color-mix(in srgb, var(--tc) 18%, transparent); border-color: var(--tc); border-style: solid; color: var(--tc); }
+  .fl-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--accent-soft); flex: none; }
+  .fl-bulk[hidden] { display: none; }
+  .fl-bulk > b { font-size: 13px; margin-right: 6px; }
+  .fl-bulk .tagbtn { border: 1px dashed; background: var(--panel); border-radius: 99px; padding: 3px 11px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .fl-bulk .tagbtn:disabled { opacity: .45; cursor: default; }
+  .fl-bulk .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+  .ch-card .check { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border); flex: none; display: grid; place-items: center;
+    color: #fff; font-size: 12px; font-weight: 800; }
+  .ch-card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .ch-card.selected .check { background: var(--accent); border-color: var(--accent); }
   .ch-head .tag-pick { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
   .ch-head .tag-pick > span { font-size: 12px; color: var(--muted); margin-right: 2px; }
   .tag-pick button { border: 1px dashed var(--border); background: none; border-radius: 99px; padding: 2px 10px; font-size: 12px; cursor: pointer; color: var(--muted); }
   .tag-pick button.on { border-style: solid; }
+  .tag-pick button { font-weight: 600; }
   .user-results { display: flex; flex-direction: column; gap: 6px; max-height: 330px; overflow-y: auto; }
   .user-result { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; padding: 8px; border: 1px solid var(--border); border-radius: 10px; }
   .user-result .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: var(--hover); }
@@ -506,8 +524,10 @@
           <span class="total" id="fl-count"></span>
           <div class="spacer"></div>
           <button class="btn sm" id="fl-seen-all" type="button">Đánh dấu đã xem hết</button>
+          <button class="btn sm" id="fl-select" type="button">Chọn nhiều</button>
         </div>
         <div class="fl-tags" id="fl-tags"></div>
+        <div class="fl-bulk" id="fl-bulk" hidden></div>
         <div class="grid-wrap"><div class="ch-grid" id="fl-list"></div></div>
       </div>
       <div class="fl-detail" id="fl-detail" hidden>
@@ -1041,7 +1061,8 @@ function renderTagFilter() {
   const opts = [["", "Tất cả"], ...Object.entries(f.tags), ["stale", "Lâu chưa update"], ["none", "Chưa gắn tag"]];
   $("fl-tags").replaceChildren(...opts.map(([t, label]) => {
     const n = f.channels.filter((c) => tagMatch(c, t)).length;
-    const b = el("button", t === cur ? "on" : "", label);
+    const color = f.tags[t] ? `tag-${t}` : t === "stale" ? "tag-stale" : "";
+    const b = el("button", [t === cur ? "on" : "", color].join(" ").trim(), label);
     b.type = "button";
     b.append(el("small", "", String(n)));
     if (t === "stale") b.title = `Không có video mới hơn ${f.stale_days} ngày (tính từ lần kiểm tra gần nhất)`;
@@ -1071,10 +1092,22 @@ function renderFollowHome() {
     info.title = c.name;
     card.append(channelAvatar(c), info);
     if (c.new.length) card.append(el("span", "chip new", `${c.new.length} mới`));
-    card.onclick = () => openFollowDetail(c.key);
+    if (state.flSelecting) {
+      const on = state.flSelected.has(c.key);
+      card.classList.toggle("selected", on);
+      card.prepend(el("span", "check", on ? "✓" : ""));
+      card.onclick = () => {
+        on ? state.flSelected.delete(c.key) : state.flSelected.add(c.key);
+        renderFollowHome();
+      };
+    } else {
+      card.onclick = () => openFollowDetail(c.key);
+    }
     return card;
   });
-  if (f.channels.length && !text && !state.followTag) {
+  state.flVisible = channels.map((c) => c.key);
+  renderBulkBar();
+  if (f.channels.length && !text && !state.followTag && !state.flSelecting) {
     const all = el("button", "ch-card all" + (totalNew ? " has-new" : ""));
     all.type = "button";
     const ava = el("span", "ch-ava");
@@ -1170,7 +1203,7 @@ function renderFollowDetail() {
   pick.append(el("span", "", "Phân loại:"));
   for (const [t, label] of Object.entries(f.tags)) {
     const on = c.tags.includes(t);
-    const b = el("button", on ? `on tag tag-${t}` : "", (on ? "✓ " : "+ ") + label);
+    const b = el("button", `tag-${t}` + (on ? " on" : ""), (on ? "✓ " : "+ ") + label);
     b.type = "button";
     b.onclick = async () => {
       const tags = on ? c.tags.filter((x) => x !== t) : [...c.tags, t];
@@ -1186,6 +1219,47 @@ function renderFollowDetail() {
   head.replaceChildren(back, channelAvatar(c, true), info, acts, pick);
 }
 $("fl-filter").oninput = () => renderFollowHome();
+
+// Chọn nhiều kênh rồi gắn / bỏ tag ngay ở màn hình kênh
+state.flSelected = new Set();
+function renderBulkBar() {
+  const bar = $("fl-bulk"), f = state.follow;
+  $("fl-select").textContent = state.flSelecting ? "Xong" : "Chọn nhiều";
+  $("fl-select").classList.toggle("primary", !!state.flSelecting);
+  bar.hidden = !state.flSelecting;
+  if (!state.flSelecting) return;
+  const exists = new Set(f.channels.map((c) => c.key));
+  for (const k of [...state.flSelected]) if (!exists.has(k)) state.flSelected.delete(k);  // kênh vừa bị bỏ theo dõi
+  const picked = f.channels.filter((c) => state.flSelected.has(c.key));
+  const allVisible = state.flVisible.length && state.flVisible.every((k) => state.flSelected.has(k));
+  const selAll = el("button", "btn sm", allVisible ? "Bỏ chọn" : "Chọn tất cả");
+  selAll.type = "button";
+  selAll.onclick = () => {
+    for (const k of state.flVisible) allVisible ? state.flSelected.delete(k) : state.flSelected.add(k);
+    renderFollowHome();
+  };
+  const items = [el("b", "", picked.length ? `Đã chọn ${picked.length} kênh` : "Bấm vào kênh để chọn"), selAll, el("span", "sep")];
+  for (const [t, label] of Object.entries(f.tags)) {
+    const all = picked.length > 0 && picked.every((c) => c.tags.includes(t));
+    const b = el("button", `tagbtn tag-${t}` + (all ? " on" : ""), (all ? "✓ " : "+ ") + label);
+    b.type = "button";
+    b.disabled = !picked.length;
+    b.title = all ? `Bỏ tag ${label} khỏi các kênh đã chọn` : `Gắn tag ${label} cho các kênh đã chọn`;
+    b.onclick = async () => {
+      const res = await api().tag_channels(picked.map((c) => c.key), t, !all);
+      if (res.error) return toast(res.error, true);
+      renderFollows(res);
+      toast(`${all ? "Đã bỏ" : "Đã gắn"} tag ${label} cho ${picked.length} kênh`);
+    };
+    items.push(b);
+  }
+  bar.replaceChildren(...items);
+}
+$("fl-select").onclick = () => {
+  state.flSelecting = !state.flSelecting;
+  if (!state.flSelecting) state.flSelected.clear();
+  renderFollowHome();
+};
 $("fl-seen-all").onclick = async () => { renderFollows(await api().mark_seen(null)); toast("Đã đánh dấu đã xem"); };
 
 function renderFollows(f) {

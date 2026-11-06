@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.7.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.7.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -1612,6 +1612,20 @@ class Api:
             if key in channels:
                 channels[key]["tags"] = tags
                 write_follows(self._data_dir(), channels)
+        self._sync_soon()
+        return self.follows()
+
+    def tag_channels(self, keys, tag, on=True) -> dict:
+        """Gắn (on=True) hoặc bỏ một tag cho nhiều kênh cùng lúc."""
+        if tag not in CHANNEL_TAGS:
+            return {"error": "Tag không hợp lệ"}
+        keys = set(keys or [])
+        with self._follow_lock:
+            channels = load_follows(self._data_dir())
+            for key in keys & channels.keys():
+                tags = set(channels[key].get("tags", [])) - {tag} | ({tag} if on else set())
+                channels[key]["tags"] = [t for t in CHANNEL_TAGS if t in tags]
+            write_follows(self._data_dir(), channels)
         self._sync_soon()
         return self.follows()
 

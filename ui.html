@@ -1071,7 +1071,7 @@ function seriesCard(s) {
   open.title = s.top.series_id ? "Mở series trên Douyin (đủ các tập)" : "Kênh không gom phim này thành 合集 trên Douyin";
   open.disabled = !s.top.series_id;
   open.onclick = () => api().open_url(seriesUrl(s.top.series_id));
-  const reup = el("button", "btn sm", "Kênh Việt?");
+  const reup = el("button", "btn sm", "Check bản quyền");
   reup.title = "Tìm trên YouTube xem đã có kênh Việt đăng lại series này chưa";
   reup.disabled = !s.top.series_name;
   reup.onclick = () => checkReup(s.top.series_name, reup);

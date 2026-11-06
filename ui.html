@@ -135,7 +135,7 @@
   .chip.warn { background: var(--warn-soft); color: var(--warn); }
   .chip.soft { background: var(--accent-soft); color: var(--accent); }
   .mv-board { flex: 1; overflow-y: auto; padding: 0 16px 24px; }
-  .mv-day { display: grid; grid-template-columns: 92px 1fr; border-top: 1px solid var(--border); }
+  .mv-day { display: grid; grid-template-columns: 92px minmax(0, 1fr); border-top: 1px solid var(--border); }
   .mv-day:first-child { border-top: 0; }
   .mv-day.past { opacity: .55; }
   .mv-date { padding: 12px 0; display: flex; flex-direction: column; gap: 2px; }
@@ -259,6 +259,7 @@
   .channel { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
   .channel .top { display: flex; align-items: center; gap: 8px; }
   .channel .top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .channel .top input { flex: 1; min-width: 0; height: 28px; }
   .channel .sub { font-size: 12px; color: var(--faint); }
   .channel .acts { display: flex; gap: 6px; }
   .chip.new { background: var(--accent); color: var(--accent-ink); }
@@ -925,13 +926,36 @@ function renderFollows(f) {
     const top = el("div", "top");
     const dot = el("span", "pdot");
     dot.style.background = PLATFORMS[c.platform]?.color || "#666";
-    top.append(dot, el("b", "", c.name));
+    const nameEl = el("b", "", c.name);
+    nameEl.title = c.name;
+    top.append(dot, nameEl);
     if (c.new.length) top.append(el("span", "chip new", `${c.new.length} mới`));
     const sub = el("div", "sub", c.checked_at ? `Kiểm tra lúc ${new Date(c.checked_at * 1000).toLocaleString("vi-VN")}` : "Chưa kiểm tra lần nào");
     const acts = el("div", "acts");
     const open = el("button", "btn sm", "Mở kênh");
     open.onclick = () => api().open_url(c.url);
-    acts.append(open);
+    const rename = el("button", "btn sm", "Đổi tên");
+    rename.onclick = () => {
+      // sửa tên ngay tại chỗ: Enter (hoặc bấm ra ngoài) để lưu, Esc để hủy
+      const input = el("input");
+      input.type = "text";
+      input.value = c.name;
+      input.maxLength = 60;
+      let done = false;
+      const finish = async (save) => {
+        if (done) return;
+        done = true;
+        const name = input.value.trim();
+        if (save && name && name !== c.name) renderFollows(await api().rename_channel(c.key, name));
+        else input.replaceWith(nameEl);
+      };
+      input.onkeydown = (e) => { if (e.key === "Enter") finish(true); else if (e.key === "Escape") finish(false); };
+      input.onblur = () => finish(true);
+      nameEl.replaceWith(input);
+      input.focus();
+      input.select();
+    };
+    acts.append(open, rename);
     if (c.new.length) {
       const seen = el("button", "btn sm", "Đã xem");
       seen.onclick = async () => renderFollows(await api().mark_seen(c.key));

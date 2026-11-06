@@ -327,6 +327,10 @@ def test_follow_check_end_to_end():
             res = api.follow_channel(f"https://www.douyin.com/user/{sec}", "Kênh thử")
             assert res["channels"][0]["name"] == "Kênh thử"
             assert api.follow_channel(sec)["error"]  # trùng
+            key = res["channels"][0]["key"]
+            assert api.rename_channel(key, "  Tên tự đặt  ")["channels"][0]["name"] == "Tên tự đặt"
+            assert api.rename_channel(key, "   ")["channels"][0]["name"] == "Tên tự đặt"  # tên trống thì giữ tên cũ
+            api.rename_channel(key, "Kênh thử")
 
             def run_check():
                 assert api.check_follows() == {"ok": True}

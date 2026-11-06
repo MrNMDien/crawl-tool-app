@@ -783,6 +783,7 @@ def test_supabase_sync():
     from urllib.parse import urlparse, parse_qs
 
     db = {}  # key -> row (1 tài khoản)
+    account = {"password": "pw"}
     tokens = {"n": 0, "valid": set()}  # mỗi lần đăng nhập có refresh token riêng, dùng 1 lần là đổi
     calls = []
 
@@ -798,6 +799,13 @@ def test_supabase_sync():
             self.end_headers()
             self.wfile.write(data)
 
+        def do_PUT(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path != "/auth/v1/user" or self.headers.get("Authorization") != "Bearer at":
+                return self.reply(401, {"message": "no auth"})
+            account["password"] = body["password"]
+            self.reply(200, {"id": "u1"})
+
         def do_GET(self):
             calls.append(("GET", self.path))
             if self.headers.get("apikey") != "pk" or not self.headers.get("Authorization", "").startswith("Bearer at"):
@@ -812,7 +820,7 @@ def test_supabase_sync():
                 return self.reply(401, {"message": "Invalid API key"})
             if url.path == "/auth/v1/token":
                 grant = parse_qs(url.query)["grant_type"][0]
-                if grant == "password" and (body["email"], body["password"]) != ("a@b.c", "pw"):
+                if grant == "password" and (body["email"], body["password"]) != ("a@b.c", account["password"]):
                     return self.reply(400, {"error_description": "Invalid login credentials"})
                 if grant == "refresh_token":
                     if body["refresh_token"] not in tokens["valid"]:
@@ -891,7 +899,15 @@ def test_supabase_sync():
             b._sync_access = None
             res = b.sync_now()
             assert not res["logged_in"] and "đăng nhập lại" in res["problem"]
+            # đổi mật khẩu: phải đúng mật khẩu cũ; xong thì đăng nhập bằng mật khẩu mới
+            assert "không đúng" in a.sync_change_password("sai", "matkhaumoi1")["error"]
+            assert a.sync_change_password("pw", "ngan")["error"]
+            assert a.sync_change_password("pw", "matkhaumoi1") == {"ok": True} and account["password"] == "matkhaumoi1"
+            assert not a.sync_now()["problem"]  # phiên vẫn dùng tiếp
+            assert "Sai email" in b.sync_login("a@b.c", "pw")["error"]
+            assert b.sync_login("a@b.c", "matkhaumoi1")["logged_in"]
             assert not a.sync_logout()["logged_in"]
+            assert a.sync_change_password("matkhaumoi1", "khac12345")["error"]  # đã đăng xuất
     finally:
         ct.save_settings, ct.Api._sync_soon, ct.SUPABASE = old
         server.shutdown()

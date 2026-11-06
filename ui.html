@@ -521,7 +521,14 @@
         <div class="sync-info" id="sync-info" hidden>
           <span id="sync-who"></span>
           <button class="btn sm" id="sync-now" type="button">Đồng bộ ngay</button>
+          <button class="btn sm" id="sync-pw-open" type="button">Đổi mật khẩu</button>
           <button class="btn sm" id="sync-logout" type="button">Đăng xuất</button>
+        </div>
+        <div class="sync-form" id="sync-pw" hidden>
+          <input type="password" id="sync-pw-old" placeholder="Mật khẩu hiện tại" autocomplete="off">
+          <input type="password" id="sync-pw-new" placeholder="Mật khẩu mới (ít nhất 8 ký tự)" autocomplete="off">
+          <div class="tg-row"><input type="password" id="sync-pw-new2" placeholder="Nhập lại mật khẩu mới" autocomplete="off">
+            <div class="row-inline"><button class="btn" id="sync-pw-cancel" type="button">Hủy</button><button class="btn primary" id="sync-pw-save" type="button">Lưu</button></div></div>
         </div>
         <p class="hint bad" id="sync-problem" hidden></p>
       </div>
@@ -1477,6 +1484,7 @@ function renderSync(s) {
   $("sync-card").hidden = !s.available;
   $("sync-form").hidden = s.logged_in;
   $("sync-info").hidden = !s.logged_in;
+  if (!s.logged_in) $("sync-pw").hidden = true;
   if (!$("sync-email").value) $("sync-email").value = s.email || "";
   const who = $("sync-who");
   who.textContent = `${s.email} · ` + (s.last_sync ? `đồng bộ lúc ${new Date(s.last_sync * 1000).toLocaleString("vi-VN")}` : "chưa đồng bộ");
@@ -1502,6 +1510,25 @@ $("sync-now").onclick = async () => {
   renderSync(res);
   toast(res.problem || "Đã đồng bộ", !!res.problem);
   loadData();
+};
+const closePw = () => {
+  $("sync-pw").hidden = true;
+  for (const id of ["sync-pw-old", "sync-pw-new", "sync-pw-new2"]) $(id).value = "";
+};
+$("sync-pw-open").onclick = () => { $("sync-pw").hidden = false; $("sync-pw-old").focus(); };
+$("sync-pw-cancel").onclick = closePw;
+$("sync-pw-save").onclick = async () => {
+  if ($("sync-pw-new").value !== $("sync-pw-new2").value) return toast("Hai lần nhập mật khẩu mới không khớp", true);
+  const btn = $("sync-pw-save");
+  btn.disabled = true;
+  try {
+    const res = await api().sync_change_password($("sync-pw-old").value, $("sync-pw-new").value);
+    if (res.error) return toast(res.error, true);
+    closePw();
+    toast("Đã đổi mật khẩu. Máy khác dùng mật khẩu mới khi đăng nhập lại.");
+  } finally {
+    btn.disabled = false;
+  }
 };
 $("sync-logout").onclick = async () => { renderSync(await api().sync_logout()); toast("Đã đăng xuất tài khoản đồng bộ trên máy này"); };
 

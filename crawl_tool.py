@@ -1778,6 +1778,36 @@ class Api:
         self._sync()
         return self.get_sync()
 
+    def sync_change_password(self, old, new) -> dict:
+        """Đổi mật khẩu tài khoản đồng bộ: đăng nhập lại bằng mật khẩu cũ để xác nhận, rồi đặt mật khẩu mới."""
+        old, new = str(old or ""), str(new or "")
+        email = self._sync_cfg().get("email", "")
+        if not (SUPABASE and email and self._sync_cfg().get("refresh")):
+            return {"error": "Đăng nhập trước khi đổi mật khẩu"}
+        if len(new) < 8:
+            return {"error": "Mật khẩu mới cần ít nhất 8 ký tự"}
+        if new == old:
+            return {"error": "Mật khẩu mới phải khác mật khẩu cũ"}
+        url, key = SUPABASE["url"], SUPABASE["key"]
+        try:
+            try:
+                data = supabase_call(url, key, "/auth/v1/token?grant_type=password", "POST", {"email": email, "password": old})
+            except urllib.error.HTTPError as e:
+                msg = supabase_error(e)
+                return {"error": "Mật khẩu hiện tại không đúng" if msg == "Sai email hoặc mật khẩu" else msg}
+            supabase_call(url, key, "/auth/v1/user", "PUT", {"password": new}, data["access_token"])
+        except urllib.error.HTTPError as e:
+            return {"error": f"Không đổi được mật khẩu: {supabase_error(e)}"}
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            return {"error": f"Không kết nối được máy chủ đồng bộ: {e}"}
+        with self._sync_lock:
+            s = self._sync_cfg()
+            s["refresh"] = encrypt_token(data["refresh_token"])  # phiên mới từ lần xác nhận mật khẩu cũ
+            self._settings["sync"] = s
+            self._sync_access = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 120)
+            save_settings(self._settings)
+        return {"ok": True}
+
     def sync_logout(self) -> dict:
         with self._sync_lock:
             s = self._sync_cfg()

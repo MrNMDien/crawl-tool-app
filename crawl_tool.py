@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
@@ -31,7 +32,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.8.3"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.8.4"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -161,8 +162,16 @@ def parse_version(text: str) -> tuple:
 
 
 def latest_app_release() -> dict:
-    """Bản app mới nhất trên GitHub Releases (tag app-v*, có file CrawlTool.exe). Không có thì {}."""
-    releases = json.loads(github_get(f"https://api.github.com/repos/{APP_REPO}/releases?per_page=30"))
+    """Bản app mới nhất trên GitHub Releases (tag app-v*, có file CrawlTool.exe). Không có thì {}.
+
+    API GitHub chỉ cho 60 lượt/giờ mỗi IP (cả văn phòng dùng chung 1 IP là hết): hết lượt thì đọc
+    releases.atom, trang này không tính lượt."""
+    try:
+        releases = json.loads(github_get(f"https://api.github.com/repos/{APP_REPO}/releases?per_page=30"))
+    except urllib.error.HTTPError as e:
+        if e.code not in (403, 429):
+            raise
+        return latest_app_release_from_feed(github_get(f"https://github.com/{APP_REPO}/releases.atom"))
     best = {}
     for rel in releases if isinstance(releases, list) else []:
         tag = str(rel.get("tag_name") or "")
@@ -176,6 +185,27 @@ def latest_app_release() -> dict:
             notes = re.sub(r"sha256:\s*[0-9a-fA-F]{64}", "", body).strip()
             best = {"version_tuple": version, "version": ".".join(map(str, version)), "notes": notes[:500],
                     "asset_url": asset["browser_download_url"], "size": asset.get("size", 0), "sha256": sha.group(1).lower() if sha else ""}
+    return best
+
+
+def latest_app_release_from_feed(feed: bytes) -> dict:
+    """Như latest_app_release nhưng đọc từ releases.atom (không có danh sách file, nên chỉ nhận bản
+    có sha256 trong ghi chú: release.ps1 luôn đăng exe kèm sha256)."""
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    best = {}
+    for entry in ET.fromstring(feed).findall("a:entry", ns):
+        tag = (entry.findtext("a:id", "", ns) or "").rsplit("/", 1)[-1]
+        version = parse_version(tag)
+        if not tag.startswith(APP_RELEASE_PREFIX) or not version or version <= best.get("version_tuple", ()):
+            continue
+        body = html.unescape(re.sub(r"<[^>]+>", "", entry.findtext("a:content", "", ns) or ""))
+        sha = re.search(r"sha256:\s*([0-9a-fA-F]{64})", body)
+        if not sha:
+            continue
+        notes = re.sub(r"sha256:\s*[0-9a-fA-F]{64}", "", body).strip()
+        best = {"version_tuple": version, "version": ".".join(map(str, version)), "notes": notes[:500],
+                "asset_url": f"https://github.com/{APP_REPO}/releases/download/{tag}/{APP_NAME}.exe",
+                "size": 0, "sha256": sha.group(1).lower()}
     return best
 
 
@@ -234,6 +264,27 @@ def extract_zipball(zip_bytes: bytes, dest: Path) -> None:
         if len(roots) != 1:
             raise RuntimeError("File zip base code không đúng định dạng")
         shutil.move(str(roots[0]), str(dest))
+
+
+# Base code gốc (MediaCrawler) cài thư viện qua mirror Tsinghua: mirror này chặn IP ngoài Trung Quốc (403).
+PYPI_MIRRORS = {
+    b"https://pypi.tuna.tsinghua.edu.cn/simple": b"https://pypi.org/simple",
+    b"https://pypi.tuna.tsinghua.edu.cn/packages/": b"https://files.pythonhosted.org/packages/",
+}
+
+
+def use_official_pypi(base: Path) -> None:
+    """Đổi địa chỉ mirror PyPI Trung Quốc trong pyproject.toml và uv.lock sang PyPI chính thức.
+    Cùng file, cùng hash, chỉ khác máy chủ, nên uv.lock vẫn khớp và không phải giải lại thư viện."""
+    for name in ("pyproject.toml", "uv.lock"):
+        path = base / name
+        if not path.is_file():
+            continue
+        data = original = path.read_bytes()
+        for mirror, official in PYPI_MIRRORS.items():
+            data = data.replace(mirror, official)
+        if data != original:
+            path.write_bytes(data)
 
 
 def base_dir_for(sha: str) -> Path:
@@ -1783,6 +1834,7 @@ class Api:
             new_dir = base_dir_for(sha)
             shutil.rmtree(new_dir, ignore_errors=True)
             extract_zipball(zip_path.read_bytes(), new_dir)
+            use_official_pypi(new_dir)
             self._write("Đang cài thư viện (lần đầu sẽ lâu vì phải tải Python và thư viện)...")
             if self._run_logged([uv_path(), "sync"], new_dir) != 0:
                 raise RuntimeError("uv sync thất bại, xem log ở trên")

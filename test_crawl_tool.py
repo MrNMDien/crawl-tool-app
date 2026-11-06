@@ -477,6 +477,31 @@ def test_app_self_update():
     assert latest["version"] == "1.2.0" and latest["asset_url"] == "u-120" and latest["sha256"] == sha
     assert latest["notes"] == "Sửa dán"
 
+    # API hết lượt (403 rate limit) -> đọc releases.atom
+    feed = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><id>tag:github.com,2008:Repository/1/app-v1.1.0</id>
+    <content type="html">&lt;p&gt;Cũ&lt;/p&gt;&lt;p&gt;sha256: {"1" * 64}&lt;/p&gt;</content></entry>
+  <entry><id>tag:github.com,2008:Repository/1/app-v1.2.0</id>
+    <content type="html">&lt;p&gt;Sửa &amp;amp; dán&lt;/p&gt;
+&lt;p&gt;sha256: {sha}&lt;/p&gt;</content></entry>
+  <entry><id>tag:github.com,2008:Repository/1/app-v1.9.0</id><content type="html">không sha</content></entry>
+  <entry><id>tag:github.com,2008:Repository/1/v9.9.9</id><content type="html">sha256: {"2" * 64}</content></entry>
+</feed>""".encode()
+
+    def limited_get(url, timeout=120):
+        if "api.github.com" in url:
+            raise ct.urllib.error.HTTPError(url, 403, "rate limit exceeded", {}, None)
+        assert url == f"https://github.com/{ct.APP_REPO}/releases.atom"
+        return feed
+    ct.github_get = limited_get
+    try:
+        from_feed = ct.latest_app_release()
+    finally:
+        ct.github_get = old_get
+    assert from_feed["version"] == "1.2.0" and from_feed["sha256"] == sha and from_feed["notes"] == "Sửa & dán"
+    assert from_feed["asset_url"] == f"https://github.com/{ct.APP_REPO}/releases/download/app-v1.2.0/CrawlTool.exe"
+
     with tempfile.TemporaryDirectory() as tmp:
         exe = Path(tmp) / "CrawlTool.exe"
         exe.write_bytes(b"MZ old")
@@ -580,6 +605,8 @@ def test_bundled_base_installs_once():
         zip_path = home / "base.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr("MediaCrawler/main.py", "print('base')")
+            zf.writestr("MediaCrawler/uv.lock", 'source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }\r\n'
+                        'wheels = [{ url = "https://pypi.tuna.tsinghua.edu.cn/packages/a1/ee/x.whl" }]\r\n')
         ct.APP_HOME, ct.BASE_DIR, ct.BROWSER_DATA_DIR = home, home / "base", home / "browser_data"
         ct.save_settings = lambda settings: None
         ct.bundled_base = lambda: (zip_path, "c0ffee1234567890")
@@ -594,6 +621,9 @@ def test_bundled_base_installs_once():
             api._update_worker()
             base = home / "base-c0ffee123456"
             assert (base / "main.py").read_text() == "print('base')" and syncs == [base]
+            # mirror Tsinghua chặn IP ngoài Trung Quốc: trước uv sync phải đổi sang PyPI chính thức
+            assert (base / "uv.lock").read_bytes() == (b'source = { registry = "https://pypi.org/simple" }\r\n'
+                                                       b'wheels = [{ url = "https://files.pythonhosted.org/packages/a1/ee/x.whl" }]\r\n')
             assert api._settings["base_sha"] == "c0ffee1234567890" and ct.current_base(api._settings) == base
             api._update_worker()  # mở lại app: đã đúng bản, không cài lại
             assert syncs == [base] and api._state == "idle"

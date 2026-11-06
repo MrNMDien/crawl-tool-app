@@ -297,6 +297,14 @@
   .setting.danger { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
 
   /* ---------- Hộp thoại & thông báo ---------- */
+  .gate { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: grid; place-items: center; padding: 20px; }
+  .gate[hidden], .gate-box[hidden] { display: none; }
+  .gate-box { width: 380px; max-width: 100%; padding: 28px; display: flex; flex-direction: column; gap: 12px; }
+  .gate-box .brand { justify-content: center; font-size: 20px; margin-bottom: 4px; }
+  .gate-box .brand .logo img { width: 40px; height: 40px; border-radius: 10px; }
+  .gate-box h2 { margin: 0; font-size: 17px; text-align: center; }
+  .gate-box p { margin: 0; color: var(--muted); font-size: 13px; text-align: center; }
+  .gate-box .error { color: var(--danger); font-size: 13px; min-height: 18px; text-align: center; }
   .overlay { position: fixed; inset: 0; background: rgba(10,12,16,.5); display: none; place-items: center; z-index: 50; backdrop-filter: blur(2px); }
   .overlay.open { display: grid; }
   .modal { width: 480px; max-width: calc(100vw - 32px); padding: 22px; display: flex; flex-direction: column; gap: 14px; }
@@ -329,6 +337,20 @@
 </style>
 </head>
 <body>
+
+<!-- Màn hình đăng nhập: chưa đăng nhập thì không vào được app -->
+<div class="gate" id="gate">
+  <form class="card gate-box" id="gate-box" hidden autocomplete="off">
+    <div class="brand" id="gate-brand"></div>
+    <h2>Đăng nhập để sử dụng</h2>
+    <p>Dùng tài khoản được cấp. Đăng nhập một lần, các lần mở sau vào thẳng app.</p>
+    <input type="text" id="sync-email" placeholder="Email" autocomplete="off">
+    <input type="password" id="sync-pass" placeholder="Mật khẩu" autocomplete="off">
+    <div class="error" id="gate-error"></div>
+    <button class="btn primary lg" id="sync-login" type="submit">Đăng nhập</button>
+    <p>Chưa có tài khoản hoặc quên mật khẩu: liên hệ người cấp app.</p>
+  </form>
+</div>
 
 <header>
   <div class="brand"><span class="logo"><svg viewBox="0 0 24 24"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg></span>CrawlTool</div>
@@ -512,13 +534,9 @@
         <div><button class="link" id="tmdb-clear" type="button">Xóa key</button></div>
       </div>
       <div class="card setting col" id="sync-card">
-        <div class="head"><div class="info"><h3>Tài khoản đồng bộ <span class="chip" id="sync-status">chưa đăng nhập</span></h3>
+        <div class="head"><div class="info"><h3>Tài khoản <span class="chip" id="sync-status">chưa đăng nhập</span></h3>
           <p>Đăng nhập cùng một tài khoản trên các máy: kênh theo dõi, tên kênh, video đã xem được đồng bộ, máy này vừa kiểm tra thì máy kia không kiểm tra lại (không báo Telegram 2 lần).</p></div></div>
-        <div class="sync-form" id="sync-form">
-          <input type="text" id="sync-email" placeholder="Email" autocomplete="off">
-          <div class="tg-row"><input type="password" id="sync-pass" placeholder="Mật khẩu" autocomplete="off"><button class="btn primary" id="sync-login" type="button">Đăng nhập</button></div>
-        </div>
-        <div class="sync-info" id="sync-info" hidden>
+        <div class="sync-info" id="sync-info">
           <span id="sync-who"></span>
           <button class="btn sm" id="sync-now" type="button">Đồng bộ ngay</button>
           <button class="btn sm" id="sync-pw-open" type="button">Đổi mật khẩu</button>
@@ -1481,9 +1499,15 @@ function renderSync(s) {
   const ok = s.logged_in && !s.problem;
   $("sync-status").textContent = !s.logged_in ? "chưa đăng nhập" : ok ? "đang đồng bộ" : "lỗi đồng bộ";
   $("sync-status").className = "chip" + (ok ? " ok" : "");
-  $("sync-card").hidden = !s.available;
-  $("sync-form").hidden = s.logged_in;
-  $("sync-info").hidden = !s.logged_in;
+  $("sync-card").hidden = !s.available || !s.logged_in;
+  const locked = s.available && !s.logged_in;
+  const wasOpen = !$("gate").hidden;
+  $("gate").hidden = !locked;
+  $("gate-box").hidden = false;
+  if (locked) {
+    $("gate-error").textContent = s.problem || "";
+    if (!wasOpen || !$("sync-email").value) setTimeout(() => ($("sync-email").value ? $("sync-pass") : $("sync-email")).focus(), 0);
+  }
   if (!s.logged_in) $("sync-pw").hidden = true;
   if (!$("sync-email").value) $("sync-email").value = s.email || "";
   const who = $("sync-who");
@@ -1491,18 +1515,24 @@ function renderSync(s) {
   $("sync-problem").textContent = s.problem;
   $("sync-problem").hidden = !s.problem;
 }
-$("sync-login").onclick = async () => {
+$("gate-brand").innerHTML = document.querySelector("header .brand").innerHTML;
+$("gate-box").onsubmit = async (e) => {
+  e.preventDefault();
   const btn = $("sync-login");
+  if (!$("sync-email").value.trim() || !$("sync-pass").value) return ($("gate-error").textContent = "Nhập email và mật khẩu");
   btn.disabled = true;
+  btn.textContent = "Đang đăng nhập...";
+  $("gate-error").textContent = "";
   try {
     const res = await api().sync_login($("sync-email").value, $("sync-pass").value);
-    if (res.error) return toast(res.error, true);
+    if (res.error) return ($("gate-error").textContent = res.error);
     $("sync-pass").value = "";
     renderSync(res);
-    toast(res.problem ? res.problem : "Đã đăng nhập và đồng bộ kênh theo dõi", !!res.problem);
+    toast(res.problem ? res.problem : `Xin chào ${res.email}`, !!res.problem);
     loadData();
   } finally {
     btn.disabled = false;
+    btn.textContent = "Đăng nhập";
   }
 };
 $("sync-now").onclick = async () => {
@@ -1530,7 +1560,9 @@ $("sync-pw-save").onclick = async () => {
     btn.disabled = false;
   }
 };
-$("sync-logout").onclick = async () => { renderSync(await api().sync_logout()); toast("Đã đăng xuất tài khoản đồng bộ trên máy này"); };
+$("sync-logout").onclick = async () => {
+  if (await confirmBox("Đăng xuất?", "Cần đăng nhập lại mới dùng được app trên máy này.")) renderSync(await api().sync_logout());
+};
 
 function renderTmdb(t) {
   $("tmdb-status").textContent = t.has_key ? "đã có key" : "chưa có key";

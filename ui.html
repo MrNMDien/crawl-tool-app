@@ -208,6 +208,21 @@
   .eps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
   .eps button { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 6px; padding: 1px 6px; font-size: 11.5px; cursor: pointer; }
   .eps button:hover { border-color: var(--accent); color: var(--accent); }
+  /* thẩm định series: mức bản quyền, tình trạng còn ra */
+  .flags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .flag { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; white-space: nowrap; background: var(--hover); color: var(--muted); cursor: help; }
+  .flag.big, .flag.dropped { background: var(--danger-soft); color: var(--danger); }
+  .flag.unclear { background: var(--warn-soft); color: var(--warn); }
+  .flag.small, .flag.airing { background: var(--ok-soft); color: var(--ok); }
+  .flag.ended { background: var(--accent-soft); color: var(--accent); }
+  .reup-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+  .reup-list button { text-align: left; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px;
+    padding: 7px 9px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+  .reup-list button.vi { border-color: var(--danger); }
+  .reup-list button:hover { border-color: var(--accent); }
+  .reup-list small { color: var(--muted); font-size: 12px; }
+  .ch-card .info .holder, .ch-head .info .holder { font-size: 11.5px; font-weight: 700; color: var(--accent); }
+  .ch-card .info .holder.other, .ch-head .info .holder.other { color: var(--warn); }
   .meta { font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .vactions { display: flex; gap: 6px; margin-top: auto; }
   .vactions .save { flex: 1; }
@@ -305,6 +320,13 @@
   .ch-card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .ch-card.selected .check { background: var(--accent); border-color: var(--accent); }
   .ch-head .tag-pick { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
+  /* series kênh đang up: tên · tập mới nhất · tình trạng · bản quyền */
+  .ch-series { width: 100%; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+  .ch-series > b { font-size: 12px; color: var(--muted); }
+  .ch-series .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 8px; border-radius: 8px; background: var(--hover); }
+  .ch-series .row b { font-size: 13px; }
+  .ch-series .row span { color: var(--muted); }
+  .ch-card .info .now-up { color: var(--text); font-weight: 600; }
   .ch-head .tag-pick > span { font-size: 12px; color: var(--muted); margin-right: 2px; }
   .tag-pick button { border: 1px dashed var(--border); background: none; border-radius: 99px; padding: 2px 10px; font-size: 12px; cursor: pointer; color: var(--muted); }
   .tag-pick button.on { border-style: solid; }
@@ -678,6 +700,16 @@
   </div>
 </div>
 
+<!-- Kết quả kiểm tra kênh Việt đã đăng lại series chưa (YouTube) -->
+<div class="overlay" id="reup-modal">
+  <div class="card modal ai-modal">
+    <h2 id="reup-title"></h2>
+    <p id="reup-summary"></p>
+    <div class="reup-list" id="reup-list"></div>
+    <div class="acts"><button class="btn" id="reup-close">Đóng</button></div>
+  </div>
+</div>
+
 <div id="toast"></div>
 <div class="card" id="ctx"></div>
 
@@ -788,11 +820,15 @@ function createGallery(root, mode) {
   const fView = el("select");
   fView.append(new Option("Từng video", "video"), new Option("Gom theo series", "series"));
   fView.title = "Gom các tập cùng một series (合集 Douyin) thành một thẻ";
+  const fStatus = el("select");
+  for (const [v, t] of [["", "Mọi series"], ["airing", "Đang ra"], ["ended", "Đã kết thúc"], ["dropped", "Có thể đã drop"],
+    ["nobig", "Bỏ bản quyền lớn"]]) fStatus.append(new Option(t, v));
+  fStatus.title = "Lọc series theo tình trạng hoặc bản quyền";
   const total = el("span", "total");
   const reload = iconEl("button", "btn sm icon", "reload");
   reload.title = "Làm mới";
   reload.onclick = () => loadData();
-  bar.append(title, search, scope, fPlatform, fKeyword, fSort, fView, total, el("div", "spacer"));
+  bar.append(title, search, scope, fPlatform, fKeyword, fSort, fView, fStatus, total, el("div", "spacer"));
   if (isFollow) {
     const seen = el("button", "btn sm", "Đánh dấu đã xem hết");
     seen.onclick = async () => {
@@ -847,7 +883,8 @@ function createGallery(root, mode) {
     fillSelect(fKeyword, "Mọi từ khóa", [...new Set(scoped.map((i) => i.keyword).filter(Boolean))].sort().map((k) => [k, k]));
     const videos = filtered();
     const bySeries = fView.value === "series";
-    const list = bySeries ? groupSeries(videos, fSort.value) : videos;
+    fStatus.hidden = !bySeries;
+    const list = bySeries ? groupSeries(videos, fSort.value).filter((s) => seriesMatch(s.id, fStatus.value)) : videos;
     observer.disconnect();
     grid.replaceChildren(...list.slice(0, g.shown).map(bySeries ? seriesCard : card));
     grid.querySelectorAll(".thumb").forEach((t) => (thumbCache.has(t.dataset.key) ? loadThumb(t) : observer.observe(t)));
@@ -856,9 +893,12 @@ function createGallery(root, mode) {
     more.hidden = list.length <= g.shown;
     empty.hidden = list.length > 0;
     live.hidden = isLib || state.busyState !== (isFollow ? "following" : "crawling");
-    if (bySeries && videos.length) {
+    if (bySeries && fStatus.value && groupSeries(videos, fSort.value).length) {
+      emptyTitle.textContent = "Không có series khớp bộ lọc";
+      emptyText.textContent = "Đổi bộ lọc tình trạng / bản quyền để xem series khác.";
+    } else if (bySeries && videos.length) {
       emptyTitle.textContent = "Chưa thấy video nào thuộc series";
-      emptyText.textContent = "Hiện chỉ Douyin cho biết video thuộc series (合集). Video lẻ không hiện ở chế độ này.";
+      emptyText.textContent = "Series nhận từ 合集 Douyin hoặc 《tên phim》 trong mô tả. Video không có hai thứ này không hiện ở chế độ này.";
     } else if (scoped.length) {
       emptyTitle.textContent = "Không có video khớp bộ lọc";
       emptyText.textContent = "Thử bỏ bớt bộ lọc hoặc đổi từ khóa tìm.";
@@ -886,7 +926,7 @@ function createGallery(root, mode) {
     for (const mark of grid.querySelectorAll(`.saved-mark[data-key="${CSS.escape(key)}"]`)) mark.hidden = !saved;
   };
   q.oninput = () => { clearTimeout(g.timer); g.timer = setTimeout(() => { g.shown = PAGE; g.render(); }, 150); };
-  for (const s of [scope, fPlatform, fKeyword, fSort, fView]) s.onchange = () => { g.shown = PAGE; g.render(); };
+  for (const s of [scope, fPlatform, fKeyword, fSort, fView, fStatus]) s.onchange = () => { g.shown = PAGE; g.render(); };
   moreBtn.onclick = () => { g.shown += PAGE; g.render(); };
   return g;
 }
@@ -912,13 +952,72 @@ function setSaveButton(btn, saved) {
 const seriesUrl = (id) => `https://www.douyin.com/collection/${id}`;
 const TIME_SORTS = new Set(["published", "crawled", "saved_at"]);
 
+// ---------- Thẩm định series: bản quyền, tình trạng, kênh Việt đăng lại ----------
+const RIGHTS = {
+  big: ["Bản quyền lớn", "Nền tảng hoặc IP lớn, không xin được bản quyền: nên bỏ"],
+  unclear: ["Cần tra bản quyền", "Có thể chuyển thể từ truyện giấu tên: tìm truyện gốc trước khi nhận"],
+  small: ["Bản quyền nhỏ", "Studio / tác giả nhỏ, có thể tự xin phép"],
+};
+const SERIES_STATUS = { airing: "Đang ra", ended: "Đã kết thúc", dropped: "Có thể đã drop", unknown: "Chưa rõ tình trạng" };
+function statusTitle(s) {
+  const last = s.latest ? ` Tập mới nhất đã crawl đăng ${fmtDate(s.latest)}.` : "";
+  return {
+    airing: "Có tập mới trong 21 ngày qua.",
+    ended: s.planned && s.max_episode >= s.planned ? `Đã có đủ ${s.planned} tập như caption ghi (共${s.planned}集).` : "Có tập ghi 大结局 / 完结.",
+    dropped: s.channel && !s.collection ? "Kênh đang theo dõi không up thêm tập nào của phim này hơn 21 ngày, chưa có 大结局."
+      : "Đã thấy tập mới nhất nhưng quá 21 ngày không ra tập mới và chưa có 大结局.",
+    unknown: "Chưa crawl tới tập mới nhất của series nên chưa kết luận được. Theo dõi kênh để biết chắc.",
+  }[s.status] + last;
+}
+function flagEl(cls, text, title) {
+  const f = el("span", "flag " + cls, text);
+  f.title = title;
+  return f;
+}
+const rightsFlag = (level, hit) => RIGHTS[level] && flagEl(level, RIGHTS[level][0], `${RIGHTS[level][1]} (khớp chữ: ${hit})`);
+const seriesMatch = (id, f) => {
+  const s = state.series?.[id];
+  return !f || (!!s && (f === "nobig" ? s.rights !== "big" : s.status === f));
+};
+const epLabel = (e) => e.compilation && e.episode_end > e.episode ? `${e.episode}-${e.episode_end}` : e.episode || "?";
+
+async function checkReup(name, btn) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Đang tìm...";
+  try {
+    const r = await api().check_reup(name);
+    if (r.error) return toast(r.error, true);
+    $("reup-title").textContent = `Kênh Việt đăng lại: ${name}`;
+    $("reup-summary").textContent = (r.vi ? `Có ${r.vi} video tiêu đề tiếng Việt (viền đỏ): có thể đã có kênh Việt làm phim này. `
+      : "Chưa thấy video tiêu đề tiếng Việt. ") + `Đã tìm: ${r.queries.join(" · ")}. ${r.note || ""} `
+      + "Kênh đăng lại hay đổi tên phim, nên “chưa thấy” chưa chắc là chưa có.";
+    const rows = r.results.map((v) => {
+      const b = el("button", v.vi ? "vi" : "");
+      b.type = "button";
+      b.append(el("b", "", v.title), el("small", "", [v.vi && "Tiếng Việt", v.channel, v.views, v.published].filter(Boolean).join(" · ")));
+      b.onclick = () => api().open_url(v.url);
+      return b;
+    });
+    $("reup-list").replaceChildren(...(rows.length ? rows : [el("p", "", "YouTube không trả video nào cho các tên này.")]));
+    $("reup-modal").classList.add("open");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+$("reup-close").onclick = () => $("reup-modal").classList.remove("open");
+
 // Gom video theo series. Xếp series theo tổng chỉ số (like, view...) của các tập, hoặc tập mới nhất nếu xếp theo thời gian.
+// Khóa series: ID 合集 Douyin, hoặc "t:<tên>" nhận từ 《tên》 trong mô tả (kênh không dùng 合集)
+const seriesKey = (i) => i.series_key || i.series_id || "";
 function groupSeries(items, sort) {
   const groups = new Map();
   for (const item of items) {
-    if (!item.series_id) continue;
-    if (!groups.has(item.series_id)) groups.set(item.series_id, []);
-    groups.get(item.series_id).push(item);
+    const key = seriesKey(item);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
   }
   return [...groups.entries()].map(([id, episodes]) => {
     episodes.sort((a, b) => (a.episode || 0) - (b.episode || 0));
@@ -942,10 +1041,26 @@ function seriesCard(s) {
   const info = el("div", "series-info");
   const name = el("b", "", s.top.series_name || "Series không tên");
   name.title = s.top.series_name;
-  info.append(name, el("span", "", `Đã crawl ${s.episodes.length} tập` + (s.total ? ` · series đã ra ${s.total} tập` : "")));
+  const sm = state.series?.[s.id];
+  const totalText = sm?.planned ? ` · phim có ${sm.planned} tập (theo caption)` : s.total ? ` · series đã ra ${s.total} tập` : "";
+  info.append(name, el("span", "", `Đã crawl ${s.episodes.length} video, tới tập ${sm?.max_episode || "?"}` + totalText));
+  const sum = state.series?.[s.id];
+  if (sum) {
+    const flags = el("div", "flags");
+    flags.append(flagEl(sum.status, SERIES_STATUS[sum.status], statusTitle(sum)));
+    const r = rightsFlag(sum.rights, sum.rights_hit);
+    if (r) flags.append(r);
+    const parts = [];
+    if (sum.first && sum.last && sum.last.episode > sum.first.episode)
+      parts.push(`Tập ${sum.first.episode}: ${fmt.format(sum.first.likes)} like → tập ${sum.last.episode}: ${fmt.format(sum.last.likes)}`);
+    if (sum.comments) parts.push(`${fmt.format(sum.comments)} bình luận`);
+    if (sum.collects) parts.push(`${fmt.format(sum.collects)} lưu`);
+    info.append(flags);
+    if (parts.length) info.append(el("span", "", parts.join(" · ")));
+  }
   const eps = el("div", "eps");
   for (const e of s.episodes) {
-    const b = el("button", "", `Tập ${e.episode || "?"} · ${fmt.format(e.likes)}`);
+    const b = el("button", "", `Tập ${epLabel(e)} · ${fmt.format(e.likes)}`);
     b.title = e.title;
     b.onclick = () => e.url && api().open_url(e.url);
     eps.append(b);
@@ -953,9 +1068,14 @@ function seriesCard(s) {
   info.append(eps);
   c.querySelector(".vbody").prepend(info);
   const open = el("button", "btn sm", "Mở series");
-  open.title = "Mở series trên Douyin (đủ các tập)";
-  open.onclick = () => api().open_url(seriesUrl(s.id));
-  c.querySelector(".vactions").append(open);
+  open.title = s.top.series_id ? "Mở series trên Douyin (đủ các tập)" : "Kênh không gom phim này thành 合集 trên Douyin";
+  open.disabled = !s.top.series_id;
+  open.onclick = () => api().open_url(seriesUrl(s.top.series_id));
+  const reup = el("button", "btn sm", "Kênh Việt?");
+  reup.title = "Tìm trên YouTube xem đã có kênh Việt đăng lại series này chưa";
+  reup.disabled = !s.top.series_name;
+  reup.onclick = () => checkReup(s.top.series_name, reup);
+  c.querySelector(".vactions").append(open, reup);
   return c;
 }
 
@@ -984,11 +1104,19 @@ function card(item) {
     stats.append(s);
   }
   if (stats.childElementCount) body.append(stats);
-  if (item.series_id) {
-    const sc = el("div", "series-chip", `Series ${item.series_name || ""} · tập ${item.episode || "?"}${item.episodes_total ? "/" + item.episodes_total : ""}`);
+  if (seriesKey(item)) {
+    const total = item.episodes_planned || item.episodes_total;  // tổng caption ghi (共30集), không có thì số Douyin báo
+    const sc = el("div", "series-chip", `Series ${item.series_name || ""} · tập ${epLabel(item)}${total ? "/" + total : ""}`);
     sc.title = item.series_name;
     body.append(sc);
   }
+  const flags = el("div", "flags");
+  const ser = state.series?.[seriesKey(item)];  // bản quyền tính theo cả series, không theo riêng tập này
+  const r = ser ? rightsFlag(ser.rights, ser.rights_hit) : rightsFlag(item.rights, item.rights_hit);
+  if (r) flags.append(r);
+  if (item.finale) flags.append(flagEl("ended", "Tập cuối", "Mô tả có 大结局 / 完结"));
+  if (item.compilation) flags.append(flagEl("", "Video gộp", "Một video chứa nhiều tập (合集, 纯享版...)"));
+  if (flags.childElementCount) body.append(flags);
   const channel = state.channelNames?.[item.source_creator];
   const meta = [channel || item.author, fmtDate(item.published), item.keyword && "#" + item.keyword].filter(Boolean).join(" · ");
   body.append(el("div", "meta", meta));
@@ -1022,6 +1150,7 @@ async function loadData() {
   state.login = login;
   renderLogin();
   state.lastRun = data.last_run;
+  state.series = data.series || {};
   state.allItems = data.items;
   results.setItems(data.items);
   library.setItems(data.saved);
@@ -1072,6 +1201,50 @@ function renderTagFilter() {
   $("fl-tags").hidden = !f.channels.length;
 }
 const checkedText = (c) => c.checked_at ? `Kiểm tra lúc ${new Date(c.checked_at * 1000).toLocaleString("vi-VN")}` : "Chưa kiểm tra lần nào";
+// Series kênh đang up (từ video đã crawl của kênh theo dõi), series có tập mới nhất lên trước
+const channelSeries = (c) => Object.entries(state.series || {}).filter(([, s]) => s.channel === c.url)
+  .sort((a, b) => b[1].latest - a[1].latest);
+const upText = (s) => `${s.name || "Series không tên"} · tập ${s.max_episode || "?"}${s.episodes_total ? "/" + s.episodes_total : ""}`;
+function seriesRows(c) {
+  const list = channelSeries(c);
+  if (!list.length) return null;
+  const box = el("div", "ch-series");
+  box.append(el("b", "", `Kênh đang up ${list.length} series`));
+  for (const [key, s] of list) {
+    const row = el("div", "row");
+    row.append(el("b", "", upText(s)), el("span", "", `tập mới nhất đăng ${fmtDate(s.latest)}`),
+      flagEl(s.status, SERIES_STATUS[s.status], statusTitle(s)));
+    const r = rightsFlag(s.rights, s.rights_hit);
+    if (r) row.append(r);
+    if (s.collection) {
+      const open = el("button", "btn sm", "Mở series");
+      open.onclick = () => api().open_url(seriesUrl(key));
+      row.append(open);
+    }
+    box.append(row);
+  }
+  return box;
+}
+// Máy nào đang làm kênh (đồng bộ giữa các máy cùng tài khoản) để không làm trùng
+function holderEl(c) {
+  if (!c.holder) return null;
+  const mine = c.holder === state.follow.machine;
+  const h = el("span", "holder" + (mine ? "" : " other"), mine ? "Máy này đang làm" : `Máy ${c.holder} đang làm`);
+  if (c.holder_at) h.title = `Nhận lúc ${new Date(c.holder_at * 1000).toLocaleString("vi-VN")}`;
+  return h;
+}
+async function claimChannel(c, on) {
+  let res = await api().claim_channel(c.key, on, false);
+  if (res.holder) {
+    const ok = await confirmBox(`Máy ${res.holder} đang làm kênh này`,
+      on ? "Vẫn nhận về máy này? Máy kia sẽ thấy kênh đã chuyển sang máy này." : "Vẫn bỏ nhận? Máy kia sẽ thấy kênh không còn ai làm.");
+    if (!ok) return;
+    res = await api().claim_channel(c.key, on, true);
+  }
+  if (res.error) return toast(res.error, true);
+  renderFollows(res);
+  toast(on ? "Đã nhận làm kênh trên máy này" : "Đã bỏ nhận làm kênh");
+}
 
 // Màn hình đầu: lưới kênh. Kênh có video mới lên trước.
 function renderFollowHome() {
@@ -1089,6 +1262,14 @@ function renderFollowHome() {
     const info = el("div", "info");
     info.append(el("b", "", c.name), el("span", "", c.new.length ? `${c.new.length} video mới · ${checkedText(c)}` : checkedText(c)),
       channelTags(c));
+    const up = channelSeries(c);
+    if (up.length) {
+      const now = el("span", "now-up", "Đang up: " + upText(up[0][1]) + (up.length > 1 ? ` (+${up.length - 1} series)` : ""));
+      now.title = up.map(([, s]) => upText(s)).join("\n");
+      info.append(now);
+    }
+    const holder = holderEl(c);
+    if (holder) info.append(holder);
     info.title = c.name;
     card.append(channelAvatar(c), info);
     if (c.new.length) card.append(el("span", "chip new", `${c.new.length} mới`));
@@ -1164,7 +1345,14 @@ function renderFollowDetail() {
   const nameEl = el("b", "", c.name);
   nameEl.title = c.name;
   info.append(nameEl, el("span", "", (c.new.length ? `${c.new.length} video mới · ` : "Chưa có video mới · ") + checkedText(c)));
+  const holder = holderEl(c);
+  if (holder) info.append(holder);
   const acts = el("div", "acts");
+  const mine = c.holder === f.machine;
+  const claim = el("button", "btn sm" + (mine ? "" : " primary"), mine ? "Bỏ nhận làm" : c.holder ? "Nhận về máy này" : "Nhận làm trên máy này");
+  claim.title = "Ghi tên máy này vào kênh. Máy khác đăng nhập cùng tài khoản đồng bộ sẽ thấy và không làm trùng.";
+  claim.onclick = () => claimChannel(c, !mine);
+  acts.append(claim);
   const open = el("button", "btn sm", "Mở kênh");
   open.onclick = () => api().open_url(c.url);
   const rename = el("button", "btn sm", "Đổi tên");
@@ -1216,7 +1404,7 @@ function renderFollowDetail() {
     s.title = staleText(c);
     pick.append(s);
   }
-  head.replaceChildren(back, channelAvatar(c, true), info, acts, pick);
+  head.replaceChildren(back, channelAvatar(c, true), info, acts, pick, ...[seriesRows(c)].filter(Boolean));
 }
 $("fl-filter").oninput = () => renderFollowHome();
 

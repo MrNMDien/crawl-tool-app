@@ -982,7 +982,141 @@ def test_channel_tags_and_stale():
         ct.save_settings = old_save
 
 
+def test_series_appraisal():
+    """Cờ bản quyền, số tập đọc từ mô tả, tình trạng series (đang ra / kết thúc / drop / chưa rõ)."""
+    assert ct.rights_flag("《师尊》第3集 #红果短剧") == ("big", "红果")
+    assert ct.rights_flag("原创剧，没有小说，没有上架红果") == ("small", "原创剧")  # "không lên Hồng Quả" không phải bản quyền lớn
+    assert ct.rights_flag("请勿爆书名 第2集") == ("unclear", "请勿爆书名")
+    assert ct.rights_flag("鄂作登字-2025-I-1234 原创") == ("small", "作登字")
+    assert ct.rights_flag("tập 5") == ("", "")
+
+    info = ct.episode_info
+    assert info("《傲娇师尊》第 15集 看全集点合集") == {"episode": 15, "episode_end": 15, "compilation": False, "finale": False, "total": 0}
+    assert info("EP12大结局") == {"episode": 12, "episode_end": 12, "compilation": False, "finale": True, "total": 0}
+    assert info("1-8合 纯享版") == {"episode": 1, "episode_end": 8, "compilation": True, "finale": False, "total": 0}
+    assert info("第176-177集")["episode_end"] == 177
+    assert info("纯享版 加长") == {"episode": 0, "episode_end": 0, "compilation": True, "finale": False, "total": 0}
+    assert not info("第20集 未完结")["finale"] and not info("还没完结 第3集")["finale"]
+    assert info("#短剧合集 #第99集 剧情")["episode"] == 0  # hashtag không tính
+    assert info("REP12 sleep") == {"episode": 0, "episode_end": 0, "compilation": False, "finale": False, "total": 0}
+    # tổng số tập trong caption
+    assert info("《师尊》第8集 共30集")["total"] == 30
+    assert (info("《师尊》8/30集")["episode"], info("《师尊》8/30集")["total"]) == (8, 30)
+    assert info("第8集/共30集")["total"] == 30 and info("全24集 第3集")["total"] == 24
+    assert info("看全集 第3集")["total"] == 0 and info("2025/11 第3集")["total"] == 0
+
+    row = {"aweme_id": "1", "title": "《X》第3集 #番茄小说", "liked_count": "1.2万", "collected_count": "300",
+           "series_id": "77", "series_name": "X", "episode": 9, "episodes_total": 20}
+    item = ct.normalize("dy", row)
+    assert item["episode"] == 3 and item["collects"] == 300 and item["rights"] == "big"  # mô tả thắng số Douyin (9)
+    assert ct.normalize("dy", {**row, "title": "không số tập"})["episode"] == 9  # không có trong mô tả: dùng số Douyin
+    assert item["series_key"] == "77" and item["series_name"] == "X"
+    # kênh không dùng 合集: nhận series theo 《tên》 trong mô tả
+    loose = ct.normalize("dy", {"aweme_id": "2", "title": "《傲娇 师尊》第5集 #短剧", "source_creator": "https://u/1"})
+    assert (loose["series_id"], loose["series_key"], loose["series_name"], loose["episode"]) == ("", "t:傲娇 师尊", "傲娇 师尊", 5)
+    assert ct.series_key("", "", "video thường") == ("", "")
+
+    now, day = 1_800_000_000, 86400
+    def ep(key, sid, n, published, total=10, title=""):
+        return {"key": key, "series_id": sid, "episode": n, "episode_end": n, "compilation": False,
+                "finale": "大结局" in title, "title": title, "published": published, "episodes_total": total,
+                "likes": 100 * n, "comments": n, "collects": 2 * n, "shares": 0}
+    items = [ep("a1", "A", 1, now - 5 * day), ep("a2", "A", 2, now - day, title="请勿爆书名"),
+             ep("b1", "B", 1, now - 90 * day), ep("b10", "B", 10, now - 60 * day, title="大结局 #红果"),
+             ep("c10", "C", 10, now - 40 * day),           # đã thấy tập 10/10, quá 21 ngày, không 大结局
+             ep("d1", "D", 1, now - 40 * day, total=30),   # mới thấy tập 1/30: chưa kết luận
+             ep("d1", "D", 1, now - 40 * day, total=30)]   # cùng video lặp (thư viện + kết quả)
+    s = ct.series_summary(items, now)
+    assert s["A"]["status"] == "airing" and s["A"]["rights"] == "unclear"
+    assert s["A"]["first"] == {"episode": 1, "likes": 100} and s["A"]["last"] == {"episode": 2, "likes": 200}
+    assert s["A"]["likes"] == 300 and s["A"]["collects"] == 6 and s["A"]["comments"] == 3
+    assert s["B"]["status"] == "ended" and s["B"]["rights"] == "big"
+    assert s["C"]["status"] == "dropped" and s["D"]["status"] == "unknown" and s["D"]["videos"] == 1
+    assert s["B"]["max_episode"] == 10 and s["A"]["collection"]
+
+    # series của kênh theo dõi (không 合集): biết kênh nào, đang up tập mấy; bản quyền tính cho cả series
+    k = [{**ep(f"k{n}", "", n, now - (9 - n) * day, total=0, title=t), "series_key": "t:Y", "series_name": "Y",
+          "source_creator": "https://u/1", "author": "kênh"} for n, t in ((7, ""), (8, "#红果短剧"), (9, ""))]
+    y = ct.series_summary(k, now)["t:Y"]
+    assert (y["name"], y["channel"], y["max_episode"], y["collection"]) == ("Y", "https://u/1", 9, False)
+    assert y["rights"] == "big" and y["status"] == "airing"
+    old = [{**v, "published": v["published"] - 40 * day} for v in k]
+    assert ct.series_summary(old, now)["t:Y"]["status"] == "dropped"  # kênh theo dõi không up tiếp hơn 21 ngày
+    assert ct.series_summary([{**v, "source_creator": ""} for v in old], now)["t:Y"]["status"] == "unknown"  # chỉ gặp qua tìm kiếm
+    full = ct.series_summary([{**v, "episodes_planned": 9} for v in old], now)["t:Y"]  # caption 共9集, đã tới tập 9
+    assert full["status"] == "ended" and full["episodes_total"] == 9 and full["planned"] == 9
+    assert ct.series_summary([{**v, "episodes_planned": 30} for v in k], now)["t:Y"]["episodes_total"] == 30
+    assert ct.normalize("dy", {"aweme_id": "3", "title": "《Z》第2集 共12集"})["episodes_planned"] == 12
+
+
+def test_youtube_reup():
+    """Đọc trang tìm kiếm YouTube; check_reup tìm thêm theo tên Việt (Gemini) và đưa video tiếng Việt lên đầu."""
+    def page(videos):
+        data = {"contents": {"list": [{"videoRenderer": {
+            "videoId": vid, "title": {"runs": [{"text": title}]}, "ownerText": {"runs": [{"text": "Kênh " + vid[:2]}]},
+            "viewCountText": {"simpleText": "1.000 lượt xem"}, "publishedTimeText": {"simpleText": "2 tuần trước"}}}
+            for vid, title in videos] + [{"videoRenderer": {"videoId": "bad"}}]}}
+        return f"<script>var ytInitialData = {json.dumps(data)};</script>"
+    res = ct.parse_youtube_results(page([("aaaaaaaaaaa", "傲娇师尊 第1集"), ("bbbbbbbbbbb", "Sư Tôn Ngạo Kiều tập 1")]))
+    assert [r["id"] for r in res] == ["aaaaaaaaaaa", "bbbbbbbbbbb"] and [r["vi"] for r in res] == [False, True]
+    assert res[1]["channel"] == "Kênh bb" and res[1]["url"] == "https://www.youtube.com/watch?v=bbbbbbbbbbb"
+    try:
+        ct.parse_youtube_results("<html>consent</html>")
+        assert False
+    except ValueError:
+        pass
+
+    pages = {"傲娇师尊": page([("aaaaaaaaaaa", "傲娇师尊 第1集")]),
+             "Sư Tôn Ngạo Kiều": page([("bbbbbbbbbbb", "Sư Tôn Ngạo Kiều vietsub"), ("aaaaaaaaaaa", "傲娇师尊 第1集")])}
+    old = ct.youtube_page, ct.gemini_vi_titles, ct.decrypt_token
+    ct.youtube_page = lambda q: pages[q]
+    ct.decrypt_token = lambda blob: "key"
+    try:
+        api = ct.Api()
+        api._settings = {}
+        r = api.check_reup(" 傲娇师尊 ")
+        assert r["queries"] == ["傲娇师尊"] and "Gemini" in r["note"] and r["vi"] == 0
+        ct.gemini_vi_titles = lambda key, model, name: ["Sư Tôn Ngạo Kiều"]
+        api._settings = {"gemini": {"key": "x"}}
+        r = api.check_reup("傲娇师尊")
+        assert r["queries"] == ["傲娇师尊", "Sư Tôn Ngạo Kiều"] and r["vi"] == 1 and not r["note"]
+        assert [v["id"] for v in r["results"]] == ["bbbbbbbbbbb", "aaaaaaaaaaa"]  # tiếng Việt lên trước, không lặp
+        ct.youtube_page = lambda q: (_ for _ in ()).throw(OSError("mất mạng"))
+        assert "mất mạng" in api.check_reup("傲娇师尊")["error"]
+        assert api.check_reup("  ")["error"]
+    finally:
+        ct.youtube_page, ct.gemini_vi_titles, ct.decrypt_token = old
+
+
+def test_claim_channel():
+    """Nhận làm kênh trên máy này; máy khác đang giữ thì phải xác nhận (force) mới đổi."""
+    old_save, old_machine = ct.save_settings, ct.MACHINE_NAME
+    ct.save_settings = lambda settings: None
+    ct.MACHINE_NAME = "MAY-A"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            api = ct.Api()
+            api._settings = {"data_dir": tmp}
+            ct.write_follows(tmp, {"dy_a": {"url": "A", "name": "A", "platform": "dy"}})
+            res = api.claim_channel("dy_a")
+            assert res["machine"] == "MAY-A" and res["channels"][0]["holder"] == "MAY-A"
+            assert ct.load_follows(tmp)["dy_a"]["updated"]  # nhận làm cũng được đồng bộ sang máy khác
+            ct.MACHINE_NAME = "MAY-B"
+            res = api.claim_channel("dy_a")
+            assert res["holder"] == "MAY-A" and "MAY-A" in res["error"]
+            assert ct.load_follows(tmp)["dy_a"]["holder"] == "MAY-A"  # chưa xác nhận thì không đổi
+            assert api.claim_channel("dy_a", False)["holder"] == "MAY-A"
+            assert api.claim_channel("dy_a", True, True)["channels"][0]["holder"] == "MAY-B"
+            assert not api.claim_channel("dy_a", False)["channels"][0]["holder"]
+            assert api.claim_channel("khong_co")["error"]
+    finally:
+        ct.save_settings, ct.MACHINE_NAME = old_save, old_machine
+
+
 if __name__ == "__main__":
+    test_series_appraisal()
+    test_youtube_reup()
+    test_claim_channel()
     test_movie_calendar()
     test_bundled_supabase()
     test_supabase_sync()

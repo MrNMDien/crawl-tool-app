@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.7.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.8.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -431,24 +431,13 @@ def clean_keywords(raw, count: int) -> list:
     return result[:count]
 
 
-def gemini_keywords(api_key: str, model: str, topic, count: int, platforms: list) -> list:
-    """Nhờ Gemini gợi ý từ khóa tìm kiếm tiếng Trung (kèm nghĩa tiếng Việt) cho một chủ đề."""
+def gemini_text(api_key: str, model: str, prompt: str, schema: dict, temperature: float) -> str:
+    """Gọi Gemini, trả về chữ JSON của câu trả lời ("" nếu Gemini không trả gì)."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", model or ""):
         raise ValueError("Tên model Gemini không hợp lệ")
     body = {
-        "contents": [{"parts": [{"text": topic_prompt(clean_topic(topic), count, platforms)}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "OBJECT",
-                    "properties": {"keyword": {"type": "STRING"}, "meaning_vi": {"type": "STRING"}},
-                    "required": ["keyword", "meaning_vi"],
-                },
-            },
-            "temperature": 0.9,
-        },
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema, "temperature": temperature},
     }
     req = urllib.request.Request(
         GEMINI_URL.format(model=urllib.parse.quote(model)), data=json.dumps(body).encode("utf-8"), method="POST",
@@ -457,10 +446,42 @@ def gemini_keywords(api_key: str, model: str, topic, count: int, platforms: list
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = json.loads(resp.read())
     try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def gemini_keywords(api_key: str, model: str, topic, count: int, platforms: list) -> list:
+    """Nhờ Gemini gợi ý từ khóa tìm kiếm tiếng Trung (kèm nghĩa tiếng Việt) cho một chủ đề."""
+    schema = {
+        "type": "ARRAY",
+        "items": {
+            "type": "OBJECT",
+            "properties": {"keyword": {"type": "STRING"}, "meaning_vi": {"type": "STRING"}},
+            "required": ["keyword", "meaning_vi"],
+        },
+    }
+    text = gemini_text(api_key, model, topic_prompt(clean_topic(topic), count, platforms), schema, 0.9)
+    try:
         return clean_keywords(json.loads(text), count)
-    except (KeyError, IndexError, TypeError, ValueError):
+    except (TypeError, ValueError):
         raise ValueError("Gemini không trả về danh sách từ khóa, thử lại hoặc đổi cách mô tả chủ đề") from None
+
+
+def gemini_vi_titles(api_key: str, model: str, name: str) -> list:
+    """Tên tiếng Việt (Hán Việt / dịch nghĩa) mà kênh Việt reup hay đặt cho một phim Trung. Tối đa 3 tên."""
+    prompt = (f"Tên phim Trung Quốc: «{name}». Liệt kê tối đa 3 tên tiếng Việt mà kênh Việt Nam đăng lại phim này "
+              "hay đặt: tên Hán Việt (phim cổ trang, tiên hiệp, huyền huyễn) và tên dịch nghĩa. Chỉ trả tên, không giải thích.")
+    try:
+        raw = json.loads(gemini_text(api_key, model, prompt, {"type": "ARRAY", "items": {"type": "STRING"}}, 0.2))
+    except ValueError:
+        raise ValueError("Gemini không trả về tên tiếng Việt") from None
+    names = []
+    for n in raw if isinstance(raw, list) else []:
+        n = " ".join(str(n).split())[:80]
+        if n and n != name and n not in names:
+            names.append(n)
+    return names[:3]
 
 
 def gemini_error(e: urllib.error.HTTPError) -> str:
@@ -471,6 +492,61 @@ def gemini_error(e: urllib.error.HTTPError) -> str:
     hint = {400: "API key sai hoặc yêu cầu không hợp lệ", 403: "API key không có quyền dùng Gemini API",
             404: "Không có model này, kiểm tra tên model trong Cài đặt", 429: "Hết hạn mức Gemini, thử lại sau"}
     return f"Gemini báo lỗi {e.code}: {hint.get(e.code, 'lỗi không rõ')}" + (f" ({detail[:200]})" if detail else "")
+
+
+# ---------- Kiểm tra phim đã có kênh Việt đăng lại chưa (YouTube) ----------
+# Đọc trang tìm kiếm công khai của YouTube (không cần đăng nhập, không cần API key), chỉ khi người dùng bấm.
+YT_SEARCH_URL = "https://www.youtube.com/results?search_query={q}&sp=EgIQAQ%253D%253D"  # sp: chỉ lấy video
+_VI_CHARS = re.compile(r"[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]")
+
+
+def youtube_page(query: str) -> str:
+    req = urllib.request.Request(YT_SEARCH_URL.format(q=urllib.parse.quote(query)),
+                                 headers={"User-Agent": BROWSER_UA, "Accept-Language": "vi-VN,vi;q=0.9"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read(5_000_000).decode("utf-8", errors="replace")
+
+
+def _yt_text(node) -> str:
+    if not isinstance(node, dict):
+        return ""
+    return str(node.get("simpleText") or "".join(str(r.get("text", "")) for r in node.get("runs", []) if isinstance(r, dict)))
+
+
+def _video_renderers(node):
+    if isinstance(node, dict):
+        if isinstance(node.get("videoRenderer"), dict):
+            yield node["videoRenderer"]
+        for value in node.values():
+            yield from _video_renderers(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _video_renderers(value)
+
+
+def parse_youtube_results(page: str) -> list:
+    """HTML trang tìm kiếm YouTube -> [{id, url, title, channel, views, published, vi}] theo thứ tự YouTube xếp.
+    vi = tiêu đề có chữ tiếng Việt (dấu hiệu kênh Việt đã đăng lại)."""
+    start = page.find("{", page.find("ytInitialData")) if "ytInitialData" in page else -1
+    if start < 0:
+        raise ValueError("YouTube không trả danh sách video (có thể đang bị chặn), thử lại sau")
+    try:
+        data, _ = json.JSONDecoder().raw_decode(page, start)
+    except ValueError:
+        raise ValueError("Không đọc được kết quả YouTube") from None
+    results = []
+    for v in _video_renderers(data):
+        vid = str(v.get("videoId", ""))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+            continue
+        title = _yt_text(v.get("title"))[:200]
+        results.append({
+            "id": vid, "url": f"https://www.youtube.com/watch?v={vid}", "title": title,
+            "channel": _yt_text(v.get("ownerText") or v.get("longBylineText"))[:80],
+            "views": _yt_text(v.get("viewCountText"))[:40], "published": _yt_text(v.get("publishedTimeText"))[:40],
+            "vi": bool(_VI_CHARS.search(title.lower())),
+        })
+    return results
 
 
 # ---------- Lịch ra mắt phim trên các nền tảng streaming (TMDB) ----------
@@ -640,6 +716,117 @@ def find_chrome() -> bool:
     return any(p.is_file() for p in candidates)
 
 
+# ---------- Thẩm định series (theo quy trình chọn phim AI trên Douyin) ----------
+# Bản quyền: chỉ loại khi dính nền tảng / IP lớn (không xin được). Bản quyền nhỏ vẫn nhận, người dùng tự xin.
+# Dò trên mô tả video (kể cả hashtag). ponytail: chưa đọc bio kênh vì base không lưu bio; thêm khi base lưu.
+RIGHTS_BIG = ("红果", "上🔴果", "番茄小说", "番茄免费", "@番茄", "起点", "阅文", "QQ阅读", "腾讯视频", "爱奇艺",
+              "优酷", "哔哩哔哩", "B站", "书旗", "没版权", "西游", "三国演义", "红楼梦", "水浒", "封神")
+RIGHTS_UNCLEAR = ("请勿爆书名", "不要发原书名", "请勿爆📖名", "小说改编", "改编自", "原著")
+RIGHTS_SMALL = ("作登字", "作品登记证书", "原创剧", "原创短剧", "原创漫剧", "已购买官方版权")
+RIGHTS_ORDER = {"big": 3, "unclear": 2, "small": 1, "": 0}
+# "没有上架红果", "没上番茄" là lời khẳng định KHÔNG thuộc nền tảng lớn: bỏ trước khi dò
+_RIGHTS_NEGATED = re.compile(r"(?:没有|没|未|并非|非|不是|不在)\s*(?:上架|上了|上|在)?\s*@?(?:红果|番茄)")
+# "全集" không tính: tập lẻ hay ghi "看全集". "未完结", "还没完结" là chưa kết thúc.
+_FINALE = re.compile(r"大结局|全剧终|(?<![未没还不])完结")
+COMPILATION_WORDS = ("纯享版", "合集", "加长版", "加长篇")
+_EP_RANGE = re.compile(r"(?:第\s*|(?<![A-Za-z])[Ee][Pp]\s*)?(\d{1,4})\s*[-~～—–至到]\s*(\d{1,4})\s*(?:集|话|話|合)"
+                       r"|(?<![A-Za-z])[Ee][Pp]\s*(\d{1,4})\s*[-~～—–]\s*(\d{1,4})(?!\d)")
+_EP_ONE = re.compile(r"第\s*(\d{1,4})\s*[集话話]|(?<![A-Za-z])[Ee][Pp]\s*\.?\s*(\d{1,4})(?!\d)")
+# Tổng số tập ghi trong caption: 共30集, 全30集, 8/30集, 第8集/共30集
+_EP_TOTAL = re.compile(r"[共全]\s*(\d{1,4})\s*[集话話]|(?<!\d)(\d{1,4})\s*/\s*(\d{1,4})\s*[集话話]"
+                       r"|第\s*\d{1,4}\s*[集话話]?\s*/\s*共?\s*(\d{1,4})")
+SERIES_ACTIVE_DAYS = 21  # tập mới nhất trong 21 ngày = còn ra; quá mà chưa có 大结局 = có thể đã drop
+_SERIES_TITLE = re.compile(r"《([^《》\n]{1,40})》")  # kênh không dùng 合集 thì tên phim nằm trong 《...》 ở mô tả
+
+
+def series_key(series_id: str, series_name: str, title: str) -> tuple:
+    """(khóa series, tên series). Có 合集 Douyin thì dùng ID hợp tập; không có thì nhận theo 《tên phim》 trong mô tả
+    (khóa "t:<tên>"). Không nhận ra series thì ("", "")."""
+    if series_id:
+        return series_id, series_name
+    m = _SERIES_TITLE.search(str(title or ""))
+    name = " ".join(m.group(1).split()) if m else ""
+    return (f"t:{name}", name) if name else ("", "")
+
+
+def rights_flag(text: str) -> tuple:
+    """Mô tả video -> (mức bản quyền "big" | "unclear" | "small" | "", từ khóa khớp)."""
+    text = _RIGHTS_NEGATED.sub("", str(text or ""))
+    for level, words in (("big", RIGHTS_BIG), ("unclear", RIGHTS_UNCLEAR), ("small", RIGHTS_SMALL)):
+        hit = next((w for w in words if w in text), None)
+        if hit:
+            return level, hit
+    return "", ""
+
+
+def episode_info(text: str) -> dict:
+    """Số tập đọc từ mô tả (第N集, EP12, 1-8合...). Số tập Douyin trả về hay lệch nên mô tả được ưu tiên.
+    episode/episode_end = 0 khi không đọc được; compilation = video gộp nhiều tập; finale = có 大结局/完结."""
+    plain = re.sub(r"#\S+", " ", str(text or ""))  # hashtag kiểu #短剧合集 không phải nội dung video
+    finale = bool(_FINALE.search(plain))
+    t = _EP_TOTAL.search(plain)
+    total = int(t.group(1) or t.group(3) or t.group(4)) if t else 0
+    m = _EP_RANGE.search(plain)
+    if m:
+        a, b = (int(x) for x in (m.group(1, 2) if m.group(1) else m.group(3, 4)))
+        if 0 < a < b:
+            return {"episode": a, "episode_end": b, "compilation": True, "finale": finale, "total": total}
+    m = _EP_ONE.search(plain)
+    ep = int(m.group(1) or m.group(2)) if m else int(t.group(2)) if t and t.group(2) else 0
+    # có số tập lẻ thì chữ "合集" chỉ là lời mời xem hợp tập, không phải video gộp
+    return {"episode": ep, "episode_end": ep, "compilation": not ep and any(w in plain for w in COMPILATION_WORDS),
+            "finale": finale, "total": total}
+
+
+def series_summary(items: list, now: int) -> dict:
+    """Gom video theo series -> {series_key: thẩm định}. status:
+    "ended": có 大结局, hoặc đã thấy đủ số tập caption ghi (共30集 mà đã tới tập 30);
+    "airing": có tập mới trong 21 ngày;
+    "dropped": quá 21 ngày và chắc đã thấy tập mới nhất (tới tập Douyin báo đã ra, hoặc series của kênh đang theo dõi:
+               mỗi lần kiểm tra lấy video mới nhất của kênh, series không xuất hiện nữa tức là kênh không up tiếp);
+    "unknown": chưa crawl tới tập mới nhất (vd. chỉ gặp qua tìm kiếm) nên chưa kết luận được.
+    ponytail: kênh up hơn 18 video giữa 2 lần kiểm tra thì có thể sót tập; kiểm tra dày hơn nếu cần chắc."""
+    groups = {}
+    for item in items:
+        sid = item.get("series_key") or item.get("series_id")
+        if sid:
+            groups.setdefault(sid, {})[item["key"]] = item  # cùng video ở thư viện + kết quả: 1 lần
+    out = {}
+    for sid, videos in groups.items():
+        vids = list(videos.values())
+        singles = sorted((v for v in vids if v.get("episode") and not v.get("compilation")), key=lambda v: v["episode"])
+        max_ep = max((v.get("episode_end") or v.get("episode") or 0 for v in vids), default=0)
+        total = max((v.get("episodes_total") or 0 for v in vids), default=0)
+        planned = max((v.get("episodes_planned") or 0 for v in vids), default=0)
+        latest = max((v.get("published") or 0 for v in vids), default=0)
+        channel = next((v["source_creator"] for v in vids if v.get("source_creator")), "")
+        caught_up = (total and max_ep >= total) or (channel and not total)
+        if any(v.get("finale") for v in vids) or (planned and max_ep >= planned):
+            status = "ended"
+        elif latest and now - latest <= SERIES_ACTIVE_DAYS * 86400:
+            status = "airing"
+        elif latest and caught_up:  # chỉ kết luận drop khi chắc đã thấy tập mới nhất
+            status = "dropped"
+        else:
+            status = "unknown"
+        # bản quyền tính cho cả series: một tập ghi 红果 là cả series bản quyền lớn
+        worst = max((rights_flag(v.get("title", "")) for v in vids), key=lambda r: RIGHTS_ORDER[r[0]])
+        newest = max(vids, key=lambda v: v.get("published") or 0)
+        out[sid] = {
+            "name": next((v["series_name"] for v in vids if v.get("series_name")), ""),
+            "channel": channel,  # link kênh theo dõi
+            "author": newest.get("author", ""), "collection": not sid.startswith("t:"),
+            "status": status, "rights": worst[0], "rights_hit": worst[1],
+            # episodes_total: tổng để hiện "tập 8/30" (caption ghi tổng thì dùng, không thì số Douyin báo đã ra)
+            "max_episode": max_ep, "episodes_total": planned or total, "planned": planned,
+            "videos": len(vids), "latest": latest,
+            "first": {"episode": singles[0]["episode"], "likes": singles[0]["likes"]} if singles else None,
+            "last": {"episode": singles[-1]["episode"], "likes": singles[-1]["likes"]} if singles else None,
+            **{k: sum(v.get(k) or 0 for v in vids) for k in ("likes", "comments", "collects", "shares")},
+        }
+    return out
+
+
 # ---------- Thư viện video ----------
 
 def parse_count(value) -> int:
@@ -683,26 +870,38 @@ def normalize(platform: str, row: dict):
     cover = str(get("cover") or "").split(",")[0].strip()
     if cover.startswith("http://"):
         cover = "https://" + cover[len("http://"):]
+    title = str(get("title") or row.get("desc") or "").strip()[:300]
+    ep = episode_info(title)
+    rights, rights_hit = rights_flag(title)
+    sid = re.sub(r"\D", "", str(row.get("series_id") or ""))[:30]
+    skey, sname = series_key(sid, str(row.get("series_name") or "").strip()[:120], title)
     return {
         "key": f"{platform}_{item_id}",
         "platform": platform,
-        "title": str(get("title") or row.get("desc") or "").strip()[:300],
+        "title": title,
         "url": url if url.startswith(("https://", "http://")) else "",
         "cover": cover if cover.startswith("https://") else "",
         "likes": parse_count(get("likes")),
         "views": parse_count(get("views")),
         "comments": parse_count(get("comments")),
         "shares": parse_count(get("shares")),
+        "collects": parse_count(row.get("collected_count")),  # lượt lưu (Douyin, Xiaohongshu)
         "published": parse_time(get("published")),
         "crawled": parse_time(row.get("last_modify_ts")),
         "keyword": str(row.get("source_keyword") or ""),
         "source_creator": str(row.get("source_creator") or ""),  # link kênh người dùng theo dõi (chế độ creator)
         "author": str(row.get("nickname") or ""),
         # series (合集 của Douyin): ID chỉ gồm số, app ghép thành link douyin.com/collection/<id>
-        "series_id": re.sub(r"\D", "", str(row.get("series_id") or ""))[:30],
-        "series_name": str(row.get("series_name") or "").strip()[:120],
-        "episode": parse_count(row.get("episode")),
-        "episodes_total": parse_count(row.get("episodes_total")),
+        "series_id": sid,  # chỉ có khi là 合集 thật (mở được link collection)
+        "series_key": skey,  # khóa gom series: ID 合集, hoặc "t:<tên>" lấy từ 《tên》 trong mô tả
+        "series_name": sname,
+        # số tập: ưu tiên số trong mô tả (第N集), số Douyin trả về hay lệch với hợp tập
+        "episode": ep["episode"] or parse_count(row.get("episode")),
+        "episode_end": ep["episode_end"] or ep["episode"] or parse_count(row.get("episode")),
+        "episodes_total": parse_count(row.get("episodes_total")),  # 合集 Douyin: đã ra tới tập mấy
+        "episodes_planned": ep["total"],  # caption ghi tổng số tập của phim (共30集, 8/30集)
+        "compilation": ep["compilation"], "finale": ep["finale"],
+        "rights": rights, "rights_hit": rights_hit,
     }
 
 
@@ -791,9 +990,10 @@ def download_thumb(item: dict, data_dir: str):
     return path
 
 
-ITEM_FIELDS = ("key", "platform", "title", "url", "cover", "likes", "views", "comments", "shares",
+ITEM_FIELDS = ("key", "platform", "title", "url", "cover", "likes", "views", "comments", "shares", "collects",
                "published", "crawled", "keyword", "author", "source_creator",
-               "series_id", "series_name", "episode", "episodes_total")
+               "series_id", "series_key", "series_name", "episode", "episode_end", "episodes_total", "episodes_planned",
+               "compilation", "finale", "rights", "rights_hit")
 
 
 def library_file(data_dir: str) -> Path:
@@ -838,6 +1038,9 @@ DEFAULT_FOLLOW_SETTINGS = {"auto": True, "hours": 6, "last_check": 0}
 CHANNEL_TAGS = {"tiem_nang": "Tiềm năng", "chua_lam": "Chưa làm", "da_lam": "Đã làm",
                 "het_series": "Hết series", "ngung_lam": "Ngưng làm"}
 STALE_DAYS = 5  # kênh không đăng video mới quá số ngày này thì gắn "Lâu chưa update"
+# Nhận làm kênh: ghi tên máy vào kênh, đồng bộ qua Supabase để máy khác (cùng tài khoản) thấy mà không làm trùng.
+# ponytail: hai máy bấm nhận cùng lúc thì máy ghi sau thắng; cần khóa thật thì làm bảng riêng trên Supabase.
+MACHINE_NAME = (os.environ.get("COMPUTERNAME") or "Máy này")[:40]
 
 
 def follows_file(data_dir: str) -> Path:
@@ -1521,7 +1724,9 @@ class Api:
                           "tags": [t for t in c.get("tags", []) if t in CHANNEL_TAGS],
                           "last_video_at": c.get("last_video_at", 0),
                           "stale": bool(c.get("last_video_at")) and time.time() - c["last_video_at"] > STALE_DAYS * 86400,
+                          "holder": c.get("holder", ""), "holder_at": c.get("holder_at", 0),
                           "avatar": self._avatar(k, c)} for k, c in channels.items()],
+            "machine": MACHINE_NAME,
             "settings": {**settings, "next_check": settings["last_check"] + settings["hours"] * 3600},
             "telegram": {"has_token": bool(tg.get("token")), "chat_id": tg.get("chat_id", ""),
                          "chat_name": tg.get("chat_name", ""), "enabled": tg.get("enabled", True)},
@@ -1625,6 +1830,27 @@ class Api:
             for key in keys & channels.keys():
                 tags = set(channels[key].get("tags", [])) - {tag} | ({tag} if on else set())
                 channels[key]["tags"] = [t for t in CHANNEL_TAGS if t in tags]
+            write_follows(self._data_dir(), channels)
+        self._sync_soon()
+        return self.follows()
+
+    def claim_channel(self, key, on=True, force=False) -> dict:
+        """Nhận làm kênh trên máy này (on=False: bỏ nhận). Đồng bộ trước để thấy máy khác vừa nhận chưa;
+        máy khác đang giữ thì chỉ đổi khi force=True (người dùng đã xác nhận)."""
+        self._sync()
+        with self._follow_lock:
+            channels = load_follows(self._data_dir())
+            channel = channels.get(key)
+            if not channel:
+                return {"error": "Không tìm thấy kênh"}
+            holder = channel.get("holder", "")
+            if holder and holder != MACHINE_NAME and not force:
+                return {"error": f"Máy {holder} đang làm kênh này", "holder": holder}
+            if on:
+                channel["holder"], channel["holder_at"] = MACHINE_NAME, int(time.time())
+            else:
+                channel.pop("holder", None)
+                channel.pop("holder_at", None)
             write_follows(self._data_dir(), channels)
         self._sync_soon()
         return self.follows()
@@ -2046,6 +2272,41 @@ class Api:
         except ValueError as e:
             return {"error": str(e)}
 
+    def check_reup(self, name) -> dict:
+        """Tìm trên YouTube xem series đã có kênh Việt đăng lại chưa: theo tên Trung, và tên Việt nếu có Gemini."""
+        name = " ".join(str(name or "").split())[:80]
+        if not name:
+            return {"error": "Series không có tên để tìm"}
+        queries, note = [name], ""
+        gemini = self._settings.get("gemini") or {}
+        if self.get_gemini()["enabled"] and gemini.get("key"):
+            try:
+                queries += gemini_vi_titles(decrypt_token(gemini["key"]), self.get_gemini()["model"], name)
+            except (urllib.error.URLError, OSError, ValueError):
+                note = "Gemini chưa dịch được tên phim nên chỉ tìm theo tên Trung."
+        else:
+            note = "Chưa có Gemini nên chỉ tìm theo tên Trung. Kênh Việt thường đặt tên Việt, nên có thể sót."
+
+        def search(query):
+            try:
+                return parse_youtube_results(youtube_page(query)), ""
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                return [], f"{query}: {e}"
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            pages = list(pool.map(search, queries))
+        errors = [err for _, err in pages if err]
+        if len(errors) == len(queries):
+            return {"error": "Không tìm được trên YouTube. " + errors[0]}
+        seen, results = set(), []
+        for query, (found, _) in zip(queries, pages):
+            for r in found[:15]:
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    results.append({**r, "query": query})
+        results.sort(key=lambda r: not r["vi"])  # video tiêu đề tiếng Việt lên trước, giữ thứ tự YouTube
+        return {"queries": queries, "results": results[:30], "vi": sum(r["vi"] for r in results),
+                "note": note, "errors": errors}
+
     def poll(self, since=0) -> dict:
         # Đang crawl: cứ vài giây xem file kết quả có thêm video chưa để giao diện hiện dần
         if self._state == "crawling" and time.monotonic() - self._sig_checked > 3:
@@ -2122,7 +2383,8 @@ class Api:
         for item in saved_items:
             item["saved"] = True
         self._library = {**{i["key"]: i for i in saved_items}, **crawled}
-        return {"items": items, "saved": saved_items, "last_run": self._settings.get("last_run", 0)}
+        return {"items": items, "saved": saved_items, "last_run": self._settings.get("last_run", 0),
+                "series": series_summary(list(self._library.values()), int(time.time()))}
 
     def save_video(self, key) -> dict:
         item = self._library.get(key)

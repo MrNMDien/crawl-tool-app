@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.8.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.8.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -482,6 +482,41 @@ def gemini_vi_titles(api_key: str, model: str, name: str) -> list:
         if n and n != name and n not in names:
             names.append(n)
     return names[:3]
+
+
+SERIES_VI_BATCH = 60  # số tên series gửi Gemini mỗi lần dịch
+
+
+def gemini_translate_names(api_key: str, model: str, names: list) -> dict:
+    """Dịch sơ tên phim Trung sang tiếng Việt (một lần cho cả lô). Trả về {tên gốc: tên Việt}, bỏ tên Gemini trả sai."""
+    prompt = ("Dịch sơ các tên phim ngắn Trung Quốc sau sang tiếng Việt, ngắn gọn, dễ hiểu. Phim cổ trang, tiên hiệp, "
+              "huyền huyễn thì dùng tên Hán Việt; phim hiện đại thì dịch nghĩa. Giữ nguyên từng tên gốc ở trường zh.\n"
+              + json.dumps(names, ensure_ascii=False))
+    schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"zh": {"type": "STRING"}, "vi": {"type": "STRING"}},
+                                         "required": ["zh", "vi"]}}
+    try:
+        raw = json.loads(gemini_text(api_key, model, prompt, schema, 0.2))
+    except ValueError:
+        raise ValueError("Gemini không trả về bản dịch tên series") from None
+    wanted, out = set(names), {}
+    for row in raw if isinstance(raw, list) else []:
+        zh = str(row.get("zh", "")) if isinstance(row, dict) else ""
+        vi = " ".join(str(row.get("vi", "")).split())[:80] if isinstance(row, dict) else ""
+        if zh in wanted and vi and vi != zh:
+            out[zh] = vi
+    return out
+
+
+def series_vi_file(data_dir: str) -> Path:
+    return Path(data_dir) / "series_vi.json"  # tên series đã dịch: {tên gốc: tên Việt}, dịch rồi thì không gọi Gemini lại
+
+
+def load_series_vi(data_dir: str) -> dict:
+    try:
+        data = json.loads(series_vi_file(data_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if isinstance(v, str)} if isinstance(data, dict) else {}
 
 
 def gemini_error(e: urllib.error.HTTPError) -> str:
@@ -1442,6 +1477,8 @@ class Api:
         self._sync_access = None  # (access token, hết hạn lúc) của Supabase, chỉ giữ trong bộ nhớ
         self._avatar_pending = set()  # kênh đang tải ảnh đại diện (máy khác đồng bộ sang, chưa có file)
         self._movies_lock = threading.Lock()
+        self._vi_running = False  # đang dịch tên series bằng Gemini
+        self._vi_tried = set()  # tên series đã gửi dịch trong lần mở app này (lỗi thì không gọi lại liên tục)
         self._app_update = {}  # bản app mới hơn trên GitHub (nếu có)
         self._app_checked = 0.0
         self._window = None
@@ -2383,8 +2420,38 @@ class Api:
         for item in saved_items:
             item["saved"] = True
         self._library = {**{i["key"]: i for i in saved_items}, **crawled}
+        series = series_summary(list(self._library.values()), int(time.time()))
+        series_vi = load_series_vi(data_dir)
+        missing = sorted({s["name"] for s in series.values() if s["name"]} - series_vi.keys() - self._vi_tried)
+        if missing:
+            self._translate_soon(missing)
         return {"items": items, "saved": saved_items, "last_run": self._settings.get("last_run", 0),
-                "series": series_summary(list(self._library.values()), int(time.time()))}
+                "series": series, "series_vi": series_vi}
+
+    def _translate_soon(self, names: list) -> None:
+        """Dịch sơ tên series chưa có bản dịch (chạy nền, cần Gemini). Mỗi tên chỉ thử một lần mỗi lần mở app."""
+        gemini = self._settings.get("gemini") or {}
+        if not (self.get_gemini()["enabled"] and gemini.get("key")) or self._vi_running:
+            return
+        self._vi_running = True
+        self._vi_tried |= set(names)
+
+        def work():
+            data_dir = self._data_dir()
+            try:
+                key, model = decrypt_token(gemini["key"]), self.get_gemini()["model"]
+                for i in range(0, len(names), SERIES_VI_BATCH):
+                    found = gemini_translate_names(key, model, names[i:i + SERIES_VI_BATCH])
+                    if found:
+                        write_json(series_vi_file(data_dir), {**load_series_vi(data_dir), **found})
+                        self._lib_rev += 1  # giao diện tải lại để hiện tên đã dịch
+            except urllib.error.HTTPError as e:
+                self._write(f"[CẢNH BÁO] Không dịch được tên series: {gemini_error(e)}")
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                self._write(f"[CẢNH BÁO] Không dịch được tên series: {e}")
+            finally:
+                self._vi_running = False
+        threading.Thread(target=work, daemon=True).start()
 
     def save_video(self, key) -> dict:
         item = self._library.get(key)

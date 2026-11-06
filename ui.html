@@ -187,6 +187,10 @@
     background: rgba(0,0,0,.55); color: var(--star); backdrop-filter: blur(6px);
   }
   .saved-mark svg { width: 14px; height: 14px; fill: currentColor; }
+  /* video mới từ kênh theo dõi (tab Theo dõi hiện mọi video của kênh, video mới được đánh dấu) */
+  .vcard.is-new { box-shadow: 0 0 0 2px var(--accent); }
+  .new-badge { position: absolute; bottom: 9px; right: 9px; font-size: 11px; font-weight: 800; color: var(--accent-ink);
+    background: var(--accent); padding: 3px 8px; border-radius: 99px; }
   .likes-chip {
     position: absolute; bottom: 9px; left: 9px; display: flex; align-items: center; gap: 5px;
     font-size: 12.5px; font-weight: 700; color: #fff; background: rgba(0,0,0,.55); padding: 3px 9px; border-radius: 99px;
@@ -798,7 +802,7 @@ function createGallery(root, mode) {
 
   const bar = el("div", "toolbar");
   const title = el("h2");
-  title.append(isLib ? "Thư viện" : isFollow ? "Video mới" : "Kết quả");
+  title.append(isLib ? "Thư viện" : isFollow ? "Video của kênh" : "Kết quả");
   const live = el("span", "live", "đang cập nhật");
   live.hidden = true;
   title.append(live);
@@ -886,7 +890,16 @@ function createGallery(root, mode) {
     fStatus.hidden = !bySeries;
     const list = bySeries ? groupSeries(videos, fSort.value).filter((s) => seriesMatch(s.id, fStatus.value)) : videos;
     observer.disconnect();
-    grid.replaceChildren(...list.slice(0, g.shown).map(bySeries ? seriesCard : card));
+    const make = (x) => {
+      const c = bySeries ? seriesCard(x) : card(x);
+      const isNew = bySeries ? x.episodes.some((e) => state.newKeys?.has(e.key)) : state.newKeys?.has(x.key);
+      if (isFollow && isNew) {
+        c.classList.add("is-new");
+        c.querySelector(".thumb").append(el("span", "new-badge", "Mới"));
+      }
+      return c;
+    };
+    grid.replaceChildren(...list.slice(0, g.shown).map(make));
     grid.querySelectorAll(".thumb").forEach((t) => (thumbCache.has(t.dataset.key) ? loadThumb(t) : observer.observe(t)));
     total.textContent = bySeries ? `${list.length} series`
       : list.length === scoped.length ? `${list.length} video` : `${list.length} / ${scoped.length} video`;
@@ -903,9 +916,9 @@ function createGallery(root, mode) {
       emptyTitle.textContent = "Không có video khớp bộ lọc";
       emptyText.textContent = "Thử bỏ bớt bộ lọc hoặc đổi từ khóa tìm.";
     } else if (isFollow) {
-      emptyTitle.textContent = "Chưa có video mới";
+      emptyTitle.textContent = "Chưa có video của kênh";
       emptyText.textContent = state.follow?.channels?.length
-        ? "Khi kênh đang theo dõi đăng video mới, video sẽ hiện ở đây."
+        ? "Bấm Kiểm tra ngay để lấy video của kênh. Video mới đăng sau đó sẽ có nhãn Mới."
         : "Dán link trang kênh Douyin ở bên trái để bắt đầu theo dõi.";
     } else if (isLib) {
       emptyTitle.textContent = "Thư viện trống";
@@ -1011,6 +1024,8 @@ $("reup-close").onclick = () => $("reup-modal").classList.remove("open");
 // Gom video theo series. Xếp series theo tổng chỉ số (like, view...) của các tập, hoặc tập mới nhất nếu xếp theo thời gian.
 // Khóa series: ID 合集 Douyin, hoặc "t:<tên>" nhận từ 《tên》 trong mô tả (kênh không dùng 合集)
 const seriesKey = (i) => i.series_key || i.series_id || "";
+// Tên series kèm bản dịch sơ tiếng Việt (Gemini dịch nền, lưu series_vi.json); chưa dịch thì chỉ tên gốc
+const seriesLabel = (name) => name && state.seriesVi?.[name] ? `${name} (${state.seriesVi[name]})` : name || "";
 function groupSeries(items, sort) {
   const groups = new Map();
   for (const item of items) {
@@ -1033,13 +1048,14 @@ function groupSeries(items, sort) {
 }
 
 function seriesCard(s) {
-  const c = card(s.top);  // ảnh bìa, nút lưu/mở/copy là của tập nhiều like nhất
+  const c = card(s.top);  // ảnh bìa, nút lưu/mở/copy/check bản quyền là của tập nhiều like nhất
   c.querySelector(".series-chip")?.remove();
+  c.querySelector(".vbody > .flags")?.remove();  // nhãn của cả series hiện trong khung series bên dưới
   const chip = c.querySelector(".likes-chip");
   chip.lastChild.textContent = fmt.format(s.likes);
   chip.title = "Tổng like các tập đã crawl";
   const info = el("div", "series-info");
-  const name = el("b", "", s.top.series_name || "Series không tên");
+  const name = el("b", "", seriesLabel(s.top.series_name) || "Series không tên");
   name.title = s.top.series_name;
   const sm = state.series?.[s.id];
   const totalText = sm?.planned ? ` · phim có ${sm.planned} tập (theo caption)` : s.total ? ` · series đã ra ${s.total} tập` : "";
@@ -1071,11 +1087,7 @@ function seriesCard(s) {
   open.title = s.top.series_id ? "Mở series trên Douyin (đủ các tập)" : "Kênh không gom phim này thành 合集 trên Douyin";
   open.disabled = !s.top.series_id;
   open.onclick = () => api().open_url(seriesUrl(s.top.series_id));
-  const reup = el("button", "btn sm", "Check bản quyền");
-  reup.title = "Tìm trên YouTube xem đã có kênh Việt đăng lại series này chưa";
-  reup.disabled = !s.top.series_name;
-  reup.onclick = () => checkReup(s.top.series_name, reup);
-  c.querySelector(".vactions").append(open, reup);
+  c.querySelector(".vactions").append(open);
   return c;
 }
 
@@ -1106,12 +1118,13 @@ function card(item) {
   if (stats.childElementCount) body.append(stats);
   if (seriesKey(item)) {
     const total = item.episodes_planned || item.episodes_total;  // tổng caption ghi (共30集), không có thì số Douyin báo
-    const sc = el("div", "series-chip", `Series ${item.series_name || ""} · tập ${epLabel(item)}${total ? "/" + total : ""}`);
-    sc.title = item.series_name;
+    const sc = el("div", "series-chip", `Series ${seriesLabel(item.series_name)} · tập ${epLabel(item)}${total ? "/" + total : ""}`);
+    sc.title = seriesLabel(item.series_name);
     body.append(sc);
   }
   const flags = el("div", "flags");
-  const ser = state.series?.[seriesKey(item)];  // bản quyền tính theo cả series, không theo riêng tập này
+  const ser = state.series?.[seriesKey(item)];  // bản quyền, tình trạng tính theo cả series, không theo riêng tập này
+  if (ser) flags.append(flagEl(ser.status, SERIES_STATUS[ser.status], statusTitle(ser)));
   const r = ser ? rightsFlag(ser.rights, ser.rights_hit) : rightsFlag(item.rights, item.rights_hit);
   if (r) flags.append(r);
   if (item.finale) flags.append(flagEl("ended", "Tập cuối", "Mô tả có 大结局 / 完结"));
@@ -1135,6 +1148,12 @@ function card(item) {
   copy.disabled = !item.url;
   copy.onclick = async () => { await api().copy(item.url); toast("Đã copy link"); };
   acts.append(save, open, copy);
+  if (seriesKey(item) && item.series_name) {
+    const reup = el("button", "btn sm", "Check bản quyền");
+    reup.title = "Tìm trên YouTube xem đã có kênh Việt đăng lại series này chưa";
+    reup.onclick = () => checkReup(item.series_name, reup);
+    acts.append(reup);
+  }
   body.append(acts);
   c.append(thumb, body);
   return c;
@@ -1151,6 +1170,7 @@ async function loadData() {
   renderLogin();
   state.lastRun = data.last_run;
   state.series = data.series || {};
+  state.seriesVi = data.series_vi || {};
   state.allItems = data.items;
   results.setItems(data.items);
   library.setItems(data.saved);
@@ -1204,7 +1224,7 @@ const checkedText = (c) => c.checked_at ? `Kiểm tra lúc ${new Date(c.checked_
 // Series kênh đang up (từ video đã crawl của kênh theo dõi), series có tập mới nhất lên trước
 const channelSeries = (c) => Object.entries(state.series || {}).filter(([, s]) => s.channel === c.url)
   .sort((a, b) => b[1].latest - a[1].latest);
-const upText = (s) => `${s.name || "Series không tên"} · tập ${s.max_episode || "?"}${s.episodes_total ? "/" + s.episodes_total : ""}`;
+const upText = (s) => `${seriesLabel(s.name) || "Series không tên"} · tập ${s.max_episode || "?"}${s.episodes_total ? "/" + s.episodes_total : ""}`;
 function seriesRows(c) {
   const list = channelSeries(c);
   if (!list.length) return null;
@@ -1294,7 +1314,7 @@ function renderFollowHome() {
     const ava = el("span", "ch-ava");
     ava.innerHTML = ICON.video;
     const info = el("div", "info");
-    info.append(el("b", "", "Tất cả video mới"), el("span", "", totalNew ? `${totalNew} video từ ${f.channels.filter((c) => c.new.length).length} kênh` : "Chưa có video mới"));
+    info.append(el("b", "", "Video của mọi kênh"), el("span", "", totalNew ? `${totalNew} video mới từ ${f.channels.filter((c) => c.new.length).length} kênh` : "Chưa có video mới"));
     all.append(ava, info);
     if (totalNew) all.append(el("span", "chip new", `${totalNew} mới`));
     all.onclick = () => openFollowDetail("*");
@@ -1328,8 +1348,11 @@ function renderFollowDetail() {
   }
   $("fl-home").hidden = true;
   $("fl-detail").hidden = false;
+  // mọi video đã lấy được của kênh (hoặc của mọi kênh), video mới được đánh dấu trong lưới
+  const urls = new Set(c ? [c.url] : f.channels.map((x) => x.url));
+  const videos = (state.allItems || []).filter((i) => urls.has(i.source_creator));
   const keys = new Set(c ? channelNewKeys(c) : f.channels.flatMap(channelNewKeys));
-  followGallery.setItems((state.allItems || []).filter((i) => keys.has(i.key)));
+  followGallery.setItems(videos);
 
   const head = $("fl-head");
   const back = el("button", "btn sm", "← Tất cả kênh");
@@ -1339,12 +1362,12 @@ function renderFollowDetail() {
     const ava = el("span", "ch-ava lg");
     ava.innerHTML = ICON.video;
     ava.style.cssText = "background: var(--accent-soft); color: var(--accent)";
-    info.append(el("b", "", "Tất cả video mới"), el("span", "", `${keys.size} video mới từ các kênh đang theo dõi`));
+    info.append(el("b", "", "Video của mọi kênh"), el("span", "", `${videos.length} video · ${keys.size} video mới`));
     return head.replaceChildren(back, ava, info);
   }
   const nameEl = el("b", "", c.name);
   nameEl.title = c.name;
-  info.append(nameEl, el("span", "", (c.new.length ? `${c.new.length} video mới · ` : "Chưa có video mới · ") + checkedText(c)));
+  info.append(nameEl, el("span", "", `${videos.length} video · ` + (c.new.length ? `${c.new.length} video mới · ` : "chưa có video mới · ") + checkedText(c)));
   const holder = holderEl(c);
   if (holder) info.append(holder);
   const acts = el("div", "acts");
@@ -1455,6 +1478,7 @@ function renderFollows(f) {
   state.follow = f;
   state.channelNames = Object.fromEntries(f.channels.map((c) => [c.url, c.name]));
   const newKeys = new Set(f.channels.flatMap((c) => c.new.map((id) => `${c.platform}_${id}`)));
+  state.newKeys = newKeys;  // lưới Theo dõi đánh dấu "Mới" cho các video này
   const totalNew = newKeys.size;
   $("follow-count").textContent = totalNew;
   $("follow-count").classList.toggle("new", totalNew > 0);

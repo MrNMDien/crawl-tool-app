@@ -1088,6 +1088,40 @@ def test_youtube_reup():
         ct.youtube_page, ct.gemini_vi_titles, ct.decrypt_token = old
 
 
+def test_series_translation():
+    """Dịch sơ tên series bằng Gemini: chạy nền, lưu series_vi.json, tên đã dịch / đã thử thì không gọi lại."""
+    old = ct.gemini_text, ct.decrypt_token, ct.save_settings
+    sent = []
+
+    def fake_gemini(key, model, prompt, schema, temp):
+        names = json.loads(prompt[prompt.index("["):])
+        sent.append(names)
+        return json.dumps([{"zh": n, "vi": "VI " + n} for n in names if n != "bỏ"] + [{"zh": "lạ", "vi": "x"}, "rác"])
+    ct.gemini_text, ct.decrypt_token, ct.save_settings = fake_gemini, (lambda b: "key"), (lambda s: None)
+    try:
+        assert ct.gemini_translate_names("k", "m", ["师尊", "bỏ"]) == {"师尊": "VI 师尊"}  # bỏ tên lạ / dòng hỏng
+        sent.clear()
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl = Path(tmp) / "douyin" / "jsonl"
+            jsonl.mkdir(parents=True)
+            rows = [{"aweme_id": str(i), "title": f"《{n}》第1集", "last_modify_ts": 1} for i, n in enumerate(["师尊", "仙途"])]
+            (jsonl / "search_contents_1.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+            api = ct.Api()
+            api._settings = {"data_dir": tmp}  # chưa có Gemini: không dịch
+            assert api.library()["series_vi"] == {} and not sent
+            api._settings = {"data_dir": tmp, "gemini": {"key": "x"}}
+            api.library()
+            for _ in range(50):
+                if not api._vi_running:
+                    break
+                time.sleep(0.05)
+            assert sent == [["仙途", "师尊"]]
+            assert api.library()["series_vi"] == {"仙途": "VI 仙途", "师尊": "VI 师尊"}
+            assert len(sent) == 1  # đã có bản dịch: không gọi Gemini lại
+    finally:
+        ct.gemini_text, ct.decrypt_token, ct.save_settings = old
+
+
 def test_claim_channel():
     """Nhận làm kênh trên máy này; máy khác đang giữ thì phải xác nhận (force) mới đổi."""
     old_save, old_machine = ct.save_settings, ct.MACHINE_NAME
@@ -1117,6 +1151,7 @@ if __name__ == "__main__":
     test_series_appraisal()
     test_youtube_reup()
     test_claim_channel()
+    test_series_translation()
     test_movie_calendar()
     test_bundled_supabase()
     test_supabase_sync()

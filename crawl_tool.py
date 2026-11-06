@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.8.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.8.2"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -484,14 +484,26 @@ def gemini_vi_titles(api_key: str, model: str, name: str) -> list:
     return names[:3]
 
 
-SERIES_VI_BATCH = 60  # số tên series gửi Gemini mỗi lần dịch
+SERIES_VI_BATCH = 40  # số tên series gửi Gemini mỗi lần dịch
+SERIES_VI_PARALLEL = 3  # số lần gọi Gemini cùng lúc (lần đầu có vài trăm tên: dịch song song cho nhanh)
 
 
-def gemini_translate_names(api_key: str, model: str, names: list) -> dict:
-    """Dịch sơ tên phim Trung sang tiếng Việt (một lần cho cả lô). Trả về {tên gốc: tên Việt}, bỏ tên Gemini trả sai."""
-    prompt = ("Dịch sơ các tên phim ngắn Trung Quốc sau sang tiếng Việt, ngắn gọn, dễ hiểu. Phim cổ trang, tiên hiệp, "
-              "huyền huyễn thì dùng tên Hán Việt; phim hiện đại thì dịch nghĩa. Giữ nguyên từng tên gốc ở trường zh.\n"
-              + json.dumps(names, ensure_ascii=False))
+def gemini_translate_names(api_key: str, model: str, names: dict) -> dict:
+    """Dịch tên phim ngắn Trung sang tiếng Việt, một lần cho cả lô. names = {tên gốc: một câu mô tả video làm ngữ cảnh}.
+    Trả về {tên gốc: tên Việt}, bỏ dòng Gemini trả sai tên gốc."""
+    rows = [{"zh": n, "mo_ta": s} for n, s in names.items()]
+    prompt = (
+        "Bạn đặt tên tiếng Việt cho phim ngắn / phim AI Trung Quốc, như các kênh Việt Nam đăng lại hay đặt.\n"
+        "Mỗi dòng có tên gốc (zh) và một câu mô tả video (mo_ta) để biết thể loại, bối cảnh, ý nghĩa.\n"
+        "Quy tắc:\n"
+        "- Hiểu nghĩa cả cụm rồi đặt tên tiếng Việt tự nhiên, dễ hiểu; KHÔNG dịch từng chữ, KHÔNG Hán Việt hóa từ thường "
+        "(vd. 落榜 là thi trượt, không phải 'Lạc Bảng').\n"
+        "- Phim cổ trang, tiên hiệp, huyền huyễn, tu tiên: dùng tên Hán Việt quen thuộc (vd. 傲娇师尊 → Sư Tôn Ngạo Kiều).\n"
+        "- Tên riêng người / địa danh Trung giữ Hán Việt; tên Hàn, Nhật, Anh giữ cách gọi quen ở Việt Nam (梨泰院 → Itaewon).\n"
+        "- Tiếng lóng mạng thì dịch theo nghĩa lóng.\n"
+        "- Chỉ dịch tên phim, không thêm chữ như 'trọn bộ', 'tuyển tập', không thêm ngoặc hay giải thích.\n"
+        "- Tên vốn không phải tiếng Trung thì giữ nguyên.\n"
+        "Giữ nguyên tên gốc ở trường zh.\n" + json.dumps(rows, ensure_ascii=False))
     schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"zh": {"type": "STRING"}, "vi": {"type": "STRING"}},
                                          "required": ["zh", "vi"]}}
     try:
@@ -507,16 +519,26 @@ def gemini_translate_names(api_key: str, model: str, names: list) -> dict:
     return out
 
 
+SERIES_VI_VERSION = 2  # đổi cách dịch thì tăng số này: bản dịch cũ bị bỏ, app dịch lại một lần
+
+
 def series_vi_file(data_dir: str) -> Path:
-    return Path(data_dir) / "series_vi.json"  # tên series đã dịch: {tên gốc: tên Việt}, dịch rồi thì không gọi Gemini lại
+    return Path(data_dir) / "series_vi.json"  # tên series đã dịch, dịch rồi thì không gọi Gemini lại
 
 
 def load_series_vi(data_dir: str) -> dict:
+    """{tên gốc: tên Việt}. File của cách dịch cũ (khác SERIES_VI_VERSION) coi như chưa dịch."""
     try:
         data = json.loads(series_vi_file(data_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return {str(k): str(v) for k, v in data.items() if isinstance(v, str)} if isinstance(data, dict) else {}
+    if not isinstance(data, dict) or data.get("version") != SERIES_VI_VERSION or not isinstance(data.get("names"), dict):
+        return {}
+    return {str(k): str(v) for k, v in data["names"].items() if isinstance(v, str)}
+
+
+def save_series_vi(data_dir: str, names: dict) -> None:
+    write_json(series_vi_file(data_dir), {"version": SERIES_VI_VERSION, "names": names})
 
 
 def gemini_error(e: urllib.error.HTTPError) -> str:
@@ -774,14 +796,35 @@ SERIES_ACTIVE_DAYS = 21  # tập mới nhất trong 21 ngày = còn ra; quá mà
 _SERIES_TITLE = re.compile(r"《([^《》\n]{1,40})》")  # kênh không dùng 合集 thì tên phim nằm trong 《...》 ở mô tả
 
 
+# Phần thừa ở cuối tên hợp tập, không thuộc tên phim: "点开看全集", "正片", "合集", "剧宣花絮合集", "第一季"...
+_NAME_TAIL = re.compile(r"(?:点开看全集|点击看全集|看全集|正片|完整版|全集|合集|纯享版|加长版|剧宣|花絮|第一季|[\s\-—_~～·•])+$")
+
+
+def clean_series_name(name: str) -> str:
+    """Tên series để hiện và để dịch: bỏ ngoặc 《》【】（）, bỏ khẩu hiệu sau "|", bỏ phần thừa ở cuối và emoji đầu."""
+    name = " ".join(str(name or "").split())
+    head = re.split(r"[|｜]", name)[0].strip()
+    if len(re.sub(r"[\W_]+", "", head)) >= 2:  # "替罪重生|重生复仇港风AI短剧" -> "替罪重生"
+        name = head
+    name = re.sub(r"[《》【】「」『』〈〉]", "", name).strip()
+    if re.fullmatch(r"[（(].+[)）]", name):
+        name = name[1:-1].strip()
+    name = re.sub(r"^[^\w]+", "", name)  # emoji / ký hiệu đầu tên
+    return _NAME_TAIL.sub("", name).strip() or name
+
+
 def series_key(series_id: str, series_name: str, title: str) -> tuple:
-    """(khóa series, tên series). Có 合集 Douyin thì dùng ID hợp tập; không có thì nhận theo 《tên phim》 trong mô tả
-    (khóa "t:<tên>"). Không nhận ra series thì ("", "")."""
-    if series_id:
-        return series_id, series_name
-    m = _SERIES_TITLE.search(str(title or ""))
-    name = " ".join(m.group(1).split()) if m else ""
-    return (f"t:{name}", name) if name else ("", "")
+    """(khóa series, tên series đã làm sạch). Tên lấy từ 合集 Douyin, hoặc 《tên phim》 trong mô tả nếu kênh không dùng 合集.
+    Gom theo TÊN (khóa "n:<tên bỏ dấu câu, khoảng trắng>"), để cùng một phim không bị tách đôi khi vừa nằm trong 合集
+    vừa có video lẻ ghi 《tên》. Không có tên mà có ID 合集 thì gom theo ID. Không nhận ra series thì ("", "")."""
+    if not series_name:
+        m = _SERIES_TITLE.search(str(title or ""))
+        series_name = m.group(1) if m else ""
+    name = clean_series_name(series_name)
+    norm = re.sub(r"[\W_]+", "", name).lower()
+    if norm:
+        return f"n:{norm}", name
+    return (series_id, "") if series_id else ("", "")
 
 
 def rights_flag(text: str) -> tuple:
@@ -847,10 +890,14 @@ def series_summary(items: list, now: int) -> dict:
         # bản quyền tính cho cả series: một tập ghi 红果 là cả series bản quyền lớn
         worst = max((rights_flag(v.get("title", "")) for v in vids), key=lambda r: RIGHTS_ORDER[r[0]])
         newest = max(vids, key=lambda v: v.get("published") or 0)
+        collection_id = next((v["series_id"] for v in vids if v.get("series_id")), "")
         out[sid] = {
             "name": next((v["series_name"] for v in vids if v.get("series_name")), ""),
             "channel": channel,  # link kênh theo dõi
-            "author": newest.get("author", ""), "collection": not sid.startswith("t:"),
+            "author": newest.get("author", ""),
+            "series_id": collection_id, "collection": bool(collection_id),  # có 合集 trên Douyin: mở được link series
+            # một câu mô tả video (bỏ hashtag) làm ngữ cảnh khi nhờ Gemini dịch tên phim
+            "sample": next((s for s in (" ".join(re.sub(r"#\S+", " ", v.get("title", "")).split())[:80] for v in vids) if s), ""),
             "status": status, "rights": worst[0], "rights_hit": worst[1],
             # episodes_total: tổng để hiện "tập 8/30" (caption ghi tổng thì dùng, không thì số Douyin báo đã ra)
             "max_episode": max_ep, "episodes_total": planned or total, "planned": planned,
@@ -928,7 +975,7 @@ def normalize(platform: str, row: dict):
         "author": str(row.get("nickname") or ""),
         # series (合集 của Douyin): ID chỉ gồm số, app ghép thành link douyin.com/collection/<id>
         "series_id": sid,  # chỉ có khi là 合集 thật (mở được link collection)
-        "series_key": skey,  # khóa gom series: ID 合集, hoặc "t:<tên>" lấy từ 《tên》 trong mô tả
+        "series_key": skey,  # khóa gom series: "n:<tên chuẩn hóa>" (合集 hoặc 《tên》 trong mô tả), không có tên thì ID 合集
         "series_name": sname,
         # số tập: ưu tiên số trong mô tả (第N集), số Douyin trả về hay lệch với hợp tập
         "episode": ep["episode"] or parse_count(row.get("episode")),
@@ -2422,32 +2469,47 @@ class Api:
         self._library = {**{i["key"]: i for i in saved_items}, **crawled}
         series = series_summary(list(self._library.values()), int(time.time()))
         series_vi = load_series_vi(data_dir)
-        missing = sorted({s["name"] for s in series.values() if s["name"]} - series_vi.keys() - self._vi_tried)
+        missing = {s["name"]: s["sample"] for s in series.values()
+                   if s["name"] and s["name"] not in series_vi and s["name"] not in self._vi_tried}
         if missing:
-            self._translate_soon(missing)
+            self._translate_soon(dict(sorted(missing.items())))
         return {"items": items, "saved": saved_items, "last_run": self._settings.get("last_run", 0),
                 "series": series, "series_vi": series_vi}
 
-    def _translate_soon(self, names: list) -> None:
-        """Dịch sơ tên series chưa có bản dịch (chạy nền, cần Gemini). Mỗi tên chỉ thử một lần mỗi lần mở app."""
+    def _translate_soon(self, names: dict) -> None:
+        """Dịch tên series chưa có bản dịch (chạy nền, cần Gemini). names = {tên: câu mô tả làm ngữ cảnh}.
+        Mỗi tên chỉ thử một lần mỗi lần mở app (lỗi thì không gọi lại liên tục)."""
         gemini = self._settings.get("gemini") or {}
         if not (self.get_gemini()["enabled"] and gemini.get("key")) or self._vi_running:
             return
         self._vi_running = True
         self._vi_tried |= set(names)
+        items = list(names.items())
+        batches = [dict(items[i:i + SERIES_VI_BATCH]) for i in range(0, len(items), SERIES_VI_BATCH)]
+        lock = threading.Lock()
+
+        def one(key, model, batch):
+            try:
+                found = gemini_translate_names(key, model, batch)
+            except urllib.error.HTTPError as e:
+                return gemini_error(e)
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                return str(e)
+            if found:
+                with lock:  # các lô xong cùng lúc: ghi lần lượt để không mất bản dịch của nhau
+                    data_dir = self._data_dir()
+                    save_series_vi(data_dir, {**load_series_vi(data_dir), **found})
+                self._lib_rev += 1  # giao diện tải lại để hiện tên đã dịch
+            return ""
 
         def work():
-            data_dir = self._data_dir()
             try:
                 key, model = decrypt_token(gemini["key"]), self.get_gemini()["model"]
-                for i in range(0, len(names), SERIES_VI_BATCH):
-                    found = gemini_translate_names(key, model, names[i:i + SERIES_VI_BATCH])
-                    if found:
-                        write_json(series_vi_file(data_dir), {**load_series_vi(data_dir), **found})
-                        self._lib_rev += 1  # giao diện tải lại để hiện tên đã dịch
-            except urllib.error.HTTPError as e:
-                self._write(f"[CẢNH BÁO] Không dịch được tên series: {gemini_error(e)}")
-            except (urllib.error.URLError, OSError, ValueError) as e:
+                with ThreadPoolExecutor(max_workers=SERIES_VI_PARALLEL) as pool:
+                    errors = [e for e in pool.map(lambda b: one(key, model, b), batches) if e]
+                if errors:
+                    self._write(f"[CẢNH BÁO] Không dịch được {len(errors)}/{len(batches)} lô tên series: {errors[0]}")
+            except (OSError, ValueError) as e:
                 self._write(f"[CẢNH BÁO] Không dịch được tên series: {e}")
             finally:
                 self._vi_running = False

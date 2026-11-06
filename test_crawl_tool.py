@@ -550,7 +550,7 @@ def test_normalize_and_library():
         assert set(items) == {"dy_111", "dy_222", "xhs_abc"}
         assert items["dy_111"]["likes"] == 9000
         assert {k: items["dy_111"][k] for k in ("series_id", "series_name", "episode", "episodes_total")} == {
-            "series_id": "7694570596704716826", "series_name": "《总裁心声太反差》", "episode": 7, "episodes_total": 9}
+            "series_id": "7694570596704716826", "series_name": "总裁心声太反差", "episode": 7, "episodes_total": 9}  # bỏ ngoặc 《》
         assert items["dy_222"]["series_id"] == "1" and items["xhs_abc"]["series_id"] == ""  # ID series chỉ giữ chữ số
         assert items["dy_222"]["url"] == ""  # link lạ bị loại, không cho giao diện mở
         assert items["dy_222"]["cover"] == "https://x/b.jpg"  # http được nâng lên https
@@ -1010,11 +1010,28 @@ def test_series_appraisal():
     item = ct.normalize("dy", row)
     assert item["episode"] == 3 and item["collects"] == 300 and item["rights"] == "big"  # mô tả thắng số Douyin (9)
     assert ct.normalize("dy", {**row, "title": "không số tập"})["episode"] == 9  # không có trong mô tả: dùng số Douyin
-    assert item["series_key"] == "77" and item["series_name"] == "X"
+    assert item["series_key"] == "n:x" and item["series_name"] == "X" and item["series_id"] == "77"
     # kênh không dùng 合集: nhận series theo 《tên》 trong mô tả
     loose = ct.normalize("dy", {"aweme_id": "2", "title": "《傲娇 师尊》第5集 #短剧", "source_creator": "https://u/1"})
-    assert (loose["series_id"], loose["series_key"], loose["series_name"], loose["episode"]) == ("", "t:傲娇 师尊", "傲娇 师尊", 5)
+    assert (loose["series_id"], loose["series_key"], loose["series_name"], loose["episode"]) == ("", "n:傲娇师尊", "傲娇 师尊", 5)
     assert ct.series_key("", "", "video thường") == ("", "")
+    assert ct.series_key("88", "", "không tên") == ("88", "")  # 合集 không tên: gom theo ID
+
+    # cùng một phim: 合集 tên 《...》 và video lẻ ghi 《tên》 phải về cùng một series (trước đây bị tách đôi)
+    clean = ct.clean_series_name
+    assert clean("《总裁心声太反差》") == "总裁心声太反差" and clean("千金有诈 剧宣花絮合集") == "千金有诈"
+    assert clean("《情书仙子》点开看全集") == "情书仙子" and clean("（我的多国合租舍友）") == "我的多国合租舍友"
+    assert clean("替罪重生|重生复仇港风AI短剧") == "替罪重生" and clean("⚡️我们就是天打雷劈的那一对") == "我们就是天打雷劈的那一对"
+    assert clean("【无赦之罪】第一季 警察篇") == "无赦之罪第一季 警察篇"  # "第一季" giữa tên: giữ
+    assert clean("《醉酒女孩缠上我》第一季") == "醉酒女孩缠上我" and clean("合集") == "合集"  # chỉ có chữ thừa: giữ
+    mix = ct.normalize("dy", {"aweme_id": "4", "title": "第3集", "series_id": "769", "series_name": "《总裁心声太反差》"})
+    loose = ct.normalize("dy", {"aweme_id": "5", "title": "《总裁心声太反差》第5集"})
+    same = ct.normalize("dy", {"aweme_id": "6", "title": "《亲了校霸之后，他赖上我了》第1集"})
+    other = ct.normalize("dy", {"aweme_id": "7", "title": "x", "series_id": "1", "series_name": "《亲了校霸之后,他赖上我了》"})
+    assert mix["series_key"] == loose["series_key"] and same["series_key"] == other["series_key"]
+    merged = ct.series_summary([mix, loose], 1_800_000_000)
+    assert len(merged) == 1 and list(merged.values())[0]["videos"] == 2
+    assert list(merged.values())[0]["series_id"] == "769" and list(merged.values())[0]["collection"]
 
     now, day = 1_800_000_000, 86400
     def ep(key, sid, n, published, total=10, title=""):
@@ -1094,12 +1111,13 @@ def test_series_translation():
     sent = []
 
     def fake_gemini(key, model, prompt, schema, temp):
-        names = json.loads(prompt[prompt.index("["):])
-        sent.append(names)
-        return json.dumps([{"zh": n, "vi": "VI " + n} for n in names if n != "bỏ"] + [{"zh": "lạ", "vi": "x"}, "rác"])
+        rows = json.loads(prompt[prompt.rindex("\n[") + 1:])
+        sent.append(rows)
+        return json.dumps([{"zh": r["zh"], "vi": "VI " + r["zh"]} for r in rows if r["zh"] != "bỏ"] + [{"zh": "lạ", "vi": "x"}, "rác"])
     ct.gemini_text, ct.decrypt_token, ct.save_settings = fake_gemini, (lambda b: "key"), (lambda s: None)
     try:
-        assert ct.gemini_translate_names("k", "m", ["师尊", "bỏ"]) == {"师尊": "VI 师尊"}  # bỏ tên lạ / dòng hỏng
+        assert ct.gemini_translate_names("k", "m", {"师尊": "mô tả", "bỏ": ""}) == {"师尊": "VI 师尊"}  # bỏ tên lạ / dòng hỏng
+        assert sent[0][0] == {"zh": "师尊", "mo_ta": "mô tả"}  # gửi kèm mô tả video làm ngữ cảnh
         sent.clear()
         with tempfile.TemporaryDirectory() as tmp:
             jsonl = Path(tmp) / "douyin" / "jsonl"
@@ -1115,9 +1133,12 @@ def test_series_translation():
                 if not api._vi_running:
                     break
                 time.sleep(0.05)
-            assert sent == [["仙途", "师尊"]]
+            assert sent == [[{"zh": "仙途", "mo_ta": "《仙途》第1集"}, {"zh": "师尊", "mo_ta": "《师尊》第1集"}]]
             assert api.library()["series_vi"] == {"仙途": "VI 仙途", "师尊": "VI 师尊"}
             assert len(sent) == 1  # đã có bản dịch: không gọi Gemini lại
+            # file dịch của cách dịch cũ ({tên: bản dịch}, không có version) bị bỏ để dịch lại theo cách mới
+            ct.series_vi_file(tmp).write_text(json.dumps({"师尊": "cũ"}, ensure_ascii=False), encoding="utf-8")
+            assert ct.load_series_vi(tmp) == {}
     finally:
         ct.gemini_text, ct.decrypt_token, ct.save_settings = old
 

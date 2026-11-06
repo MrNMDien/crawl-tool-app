@@ -1084,9 +1084,10 @@ function seriesCard(s) {
   info.append(eps);
   c.querySelector(".vbody").prepend(info);
   const open = el("button", "btn sm", "Mở series");
-  open.title = s.top.series_id ? "Mở series trên Douyin (đủ các tập)" : "Kênh không gom phim này thành 合集 trên Douyin";
-  open.disabled = !s.top.series_id;
-  open.onclick = () => api().open_url(seriesUrl(s.top.series_id));
+  const collectionId = state.series?.[s.id]?.series_id || s.top.series_id;
+  open.title = collectionId ? "Mở series trên Douyin (đủ các tập)" : "Kênh không gom phim này thành 合集 trên Douyin";
+  open.disabled = !collectionId;
+  open.onclick = () => api().open_url(seriesUrl(collectionId));
   c.querySelector(".vactions").append(open);
   return c;
 }
@@ -1238,7 +1239,7 @@ function seriesRows(c) {
     if (r) row.append(r);
     if (s.collection) {
       const open = el("button", "btn sm", "Mở series");
-      open.onclick = () => api().open_url(seriesUrl(key));
+      open.onclick = () => api().open_url(seriesUrl(s.series_id));
       row.append(open);
     }
     box.append(row);

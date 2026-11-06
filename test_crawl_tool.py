@@ -1143,6 +1143,69 @@ def test_series_translation():
         ct.gemini_text, ct.decrypt_token, ct.save_settings = old
 
 
+def test_series_linking():
+    """Mọi kiểu cùng một phim bị tách ra (gặp trong dữ liệu thật) phải về một series; gộp / tách / sửa tên tay được lưu."""
+    cap = ct.caption_series_name
+    assert cap("爱意瞒不住第5集 本以为只是普通的邻居重逢") == "爱意瞒不住" and cap("总裁小闺女（第102集） #ai动漫短剧") == "总裁小闺女"
+    assert cap("gui夫EP03：你的身体是我的了") == "gui夫" and cap("【无赦之罪】第一季 · 第4集 · 白雨") == "无赦之罪"
+    assert cap("第3集｜异界来袭修仙者") == "" and cap("【独家】今天天气好") == ""  # không có tên / không có số tập
+    assert ct.series_key("55", "AI漫剧", "")[0] == "55" and ct.series_key("", "", "《短剧合集》第1集") == ("", "")
+    assert ct.series_norm("Ｎｏｖａ ！") == "nova"  # full-width
+
+    def row(i, title, creator="c1", **kw):
+        return ct.normalize("dy", {"aweme_id": str(i), "title": title, "creator_hash": creator, **kw})
+    items = [
+        # 合集 "瑞草学院" nhưng caption ghi 《瑞草学院捉鬼师·东京篇》; video lẻ (kênh khác) ghi cùng tên caption đó
+        row(1, "《瑞草学院捉鬼师·东京篇》第1集", series_id="9", series_name="瑞草学院"),
+        row(2, "《瑞草学院捉鬼师·东京篇》第2集", creator="c9"),
+        # cùng kênh: tên ngắn nằm trong tên dài; tên nhiều video nhất được hiện
+        row(3, "第1集", series_id="8", series_name="首尔今天有点鲁"), row(4, "第2集", series_id="8", series_name="首尔今天有点鲁"),
+        row(5, "第3集", series_id="7", series_name="有点鲁合集"),
+        # khác kênh: tên chứa tên nhưng không gộp (trùng y tên thì gộp: cùng phim đăng ở nhiều kênh); tên 2 chữ không gộp
+        row(6, "《有点鲁的一天》第1集", creator="c2"), row(7, "《家》第1集"), row(8, "《我的家》第1集"),
+        # tên chung chung của hai 合集 khác nhau: không gộp
+        row(9, "x", series_id="11", series_name="AI漫剧", creator="c3"), row(10, "y", series_id="12", series_name="AI漫剧", creator="c4"),
+    ]
+    ct.link_series(items, {})
+    key = {i["key"]: i["series_key"] for i in items}
+    assert key["dy_1"] == key["dy_2"] and items[0]["series_name"] == "瑞草学院"
+    assert key["dy_3"] == key["dy_4"] == key["dy_5"] and items[4]["series_name"] == "首尔今天有点鲁"
+    assert key["dy_6"] != key["dy_3"] and key["dy_7"] != key["dy_8"] and key["dy_9"] != key["dy_10"]
+    s = ct.series_summary(items, 1_800_000_000)[key["dy_3"]]
+    assert s["videos"] == 3 and set(s["members"].values()) == {"首尔今天有点鲁", "有点鲁"}
+
+    # gộp tay / tách tay (đọc lại từ khóa gốc nên gọi link_series nhiều lần vẫn đúng)
+    ct.link_series(items, {"n:家": "n:我的家", "n:有点鲁": "n:有点鲁"})
+    key = {i["key"]: i["series_key"] for i in items}
+    assert key["dy_7"] == key["dy_8"] and key["dy_5"] != key["dy_3"] and key["dy_3"] == key["dy_4"]
+
+    old = ct.save_settings
+    ct.save_settings = lambda s: None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            api = ct.Api()
+            api._settings = {"data_dir": tmp}
+            assert api.merge_series("n:a", "n:a")["error"]
+            api.merge_series("n:b", "n:c")
+            api.merge_series("n:a", "n:b")  # b đã gộp vào c: a gộp thẳng vào c
+            api.split_series("n:d")
+            assert ct.load_series_alias(tmp) == {"n:b": "n:c", "n:a": "n:c", "n:d": "n:d"}
+            # sửa tên Việt tay: thắng bản Gemini, còn nguyên khi đổi cách dịch, tra được qua tên khác trong nhóm
+            ct.save_series_vi(tmp, auto={"有点鲁": "Hơi lỗ", "首尔今天有点鲁": "Seoul hôm nay"})
+            api.set_series_vi("有点鲁", "  Seoul  hôm nay hơi quậy ")
+            auto, manual = ct.read_series_vi(tmp)
+            assert manual == {"有点鲁": "Seoul hôm nay hơi quậy"} and auto["有点鲁"] == "Hơi lỗ"
+            grouped = {"k": {"name": "首尔今天有点鲁", "members": {"n:x": "首尔今天有点鲁", "n:y": "有点鲁"}}}
+            assert ct.resolve_series_vi(grouped, auto, manual)["首尔今天有点鲁"] == "Seoul hôm nay hơi quậy"
+            data = json.loads(ct.series_vi_file(tmp).read_text(encoding="utf-8"))
+            ct.series_vi_file(tmp).write_text(json.dumps({**data, "version": 1}), encoding="utf-8")  # cách dịch cũ
+            assert ct.read_series_vi(tmp) == ({}, {"有点鲁": "Seoul hôm nay hơi quậy"})
+            api.set_series_vi("有点鲁", "")  # để trống: bỏ bản sửa tay
+            assert ct.read_series_vi(tmp)[1] == {}
+    finally:
+        ct.save_settings = old
+
+
 def test_claim_channel():
     """Nhận làm kênh trên máy này; máy khác đang giữ thì phải xác nhận (force) mới đổi."""
     old_save, old_machine = ct.save_settings, ct.MACHINE_NAME
@@ -1173,6 +1236,7 @@ if __name__ == "__main__":
     test_youtube_reup()
     test_claim_channel()
     test_series_translation()
+    test_series_linking()
     test_movie_calendar()
     test_bundled_supabase()
     test_supabase_sync()

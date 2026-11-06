@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unicodedata
 import time
 import urllib.error
 import urllib.parse
@@ -30,7 +31,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.8.2"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.8.3"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -494,7 +495,7 @@ def gemini_translate_names(api_key: str, model: str, names: dict) -> dict:
     rows = [{"zh": n, "mo_ta": s} for n, s in names.items()]
     prompt = (
         "Bạn đặt tên tiếng Việt cho phim ngắn / phim AI Trung Quốc, như các kênh Việt Nam đăng lại hay đặt.\n"
-        "Mỗi dòng có tên gốc (zh) và một câu mô tả video (mo_ta) để biết thể loại, bối cảnh, ý nghĩa.\n"
+        "Mỗi dòng có tên gốc (zh) và vài câu mô tả video của phim (mo_ta, cách nhau bằng /) để biết thể loại, bối cảnh, ý nghĩa.\n"
         "Quy tắc:\n"
         "- Hiểu nghĩa cả cụm rồi đặt tên tiếng Việt tự nhiên, dễ hiểu; KHÔNG dịch từng chữ, KHÔNG Hán Việt hóa từ thường "
         "(vd. 落榜 là thi trượt, không phải 'Lạc Bảng').\n"
@@ -519,26 +520,63 @@ def gemini_translate_names(api_key: str, model: str, names: dict) -> dict:
     return out
 
 
-SERIES_VI_VERSION = 2  # đổi cách dịch thì tăng số này: bản dịch cũ bị bỏ, app dịch lại một lần
+SERIES_VI_VERSION = 3  # đổi cách dịch thì tăng số này: bản Gemini dịch cũ bị bỏ, app dịch lại một lần (bản sửa tay giữ nguyên)
 
 
 def series_vi_file(data_dir: str) -> Path:
     return Path(data_dir) / "series_vi.json"  # tên series đã dịch, dịch rồi thì không gọi Gemini lại
 
 
-def load_series_vi(data_dir: str) -> dict:
-    """{tên gốc: tên Việt}. File của cách dịch cũ (khác SERIES_VI_VERSION) coi như chưa dịch."""
+def _str_dict(value) -> dict:
+    return {str(k): str(v) for k, v in value.items() if isinstance(v, str)} if isinstance(value, dict) else {}
+
+
+def read_series_vi(data_dir: str) -> tuple:
+    """(bản Gemini dịch, bản người dùng sửa tay), mỗi bản {tên gốc: tên Việt}.
+    Bản Gemini của cách dịch cũ (khác SERIES_VI_VERSION) coi như chưa dịch; bản sửa tay luôn giữ."""
     try:
         data = json.loads(series_vi_file(data_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict) or data.get("version") != SERIES_VI_VERSION or not isinstance(data.get("names"), dict):
-        return {}
-    return {str(k): str(v) for k, v in data["names"].items() if isinstance(v, str)}
+        return {}, {}
+    if not isinstance(data, dict):
+        return {}, {}
+    auto = _str_dict(data.get("names")) if data.get("version") == SERIES_VI_VERSION else {}
+    return auto, _str_dict(data.get("manual"))
 
 
-def save_series_vi(data_dir: str, names: dict) -> None:
-    write_json(series_vi_file(data_dir), {"version": SERIES_VI_VERSION, "names": names})
+def load_series_vi(data_dir: str) -> dict:
+    """{tên gốc: tên Việt} để hiện: bản sửa tay thắng bản Gemini."""
+    auto, manual = read_series_vi(data_dir)
+    return {**auto, **manual}
+
+
+def save_series_vi(data_dir: str, auto: dict = None, manual: dict = None) -> None:
+    old_auto, old_manual = read_series_vi(data_dir)
+    write_json(series_vi_file(data_dir), {"version": SERIES_VI_VERSION, "names": old_auto if auto is None else auto,
+                                          "manual": old_manual if manual is None else manual})
+
+
+def resolve_series_vi(series: dict, auto: dict, manual: dict) -> dict:
+    """{tên hiện của series: tên Việt}. Tên hiện của một nhóm có thể đổi khi crawl thêm video, nên tra theo mọi tên
+    trong nhóm: bản sửa tay (của tên nào trong nhóm cũng được) thắng, rồi bản Gemini của tên hiện, rồi của tên khác."""
+    out = {**auto, **manual}
+    for s in series.values():
+        names = [s["name"], *s.get("members", {}).values()]
+        hit = next((manual[n] for n in names if n in manual), None) or next((auto[n] for n in names if n in auto), None)
+        if s["name"] and hit:
+            out[s["name"]] = hit
+    return out
+
+
+def series_alias_file(data_dir: str) -> Path:
+    return Path(data_dir) / "series_alias.json"  # gộp / tách series tay: {khóa series: khóa đích}
+
+
+def load_series_alias(data_dir: str) -> dict:
+    try:
+        return _str_dict(json.loads(series_alias_file(data_dir).read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return {}
 
 
 def gemini_error(e: urllib.error.HTTPError) -> str:
@@ -813,18 +851,111 @@ def clean_series_name(name: str) -> str:
     return _NAME_TAIL.sub("", name).strip() or name
 
 
+# Tên chung chung (thể loại, khẩu hiệu), không phải tên phim: không dùng để gom series (gom nhầm nhiều phim khác nhau)
+_GENERIC_NAME = re.compile(r"(?:ai|aigc)?(?:短剧|漫剧|微短剧|动漫|动画|新剧|好剧|独家|原创|合集|全集|推荐|热播|精选|更新|预告|"
+                           r"剧情|电视剧|电影|连续剧|小剧场|ai)+(?:推荐|合集|来袭)?", re.I)
+# Kênh không dùng 《》: tên phim đứng ngay trước số tập ở đầu caption ("爱意瞒不住第5集", "总裁小闺女（第102集）", "gui夫EP03")
+_NAME_BEFORE_EP = re.compile(r"^\s*([^\s#《》【】|｜:：,，。!！?？（）()\[\]]{2,20}?)\s*[（(]?\s*"
+                             r"(?:第\s*\d{1,4}\s*[集话話]|(?<![A-Za-z])[Ee][Pp]\s*\d{1,4})")
+_NAME_BRACKET = re.compile(r"【([^【】\n]{2,30})】")
+
+
+def series_norm(name: str) -> str:
+    """Tên đã làm sạch -> chuỗi so sánh (bỏ dấu câu, khoảng trắng, chữ hoa thường, full-width)."""
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", name)).lower()
+
+
+def caption_series_name(title: str) -> str:
+    """Tên phim đọc từ caption: 《tên》; không có thì 【tên】 hoặc tên đứng trước số tập (chỉ khi caption có số tập)."""
+    title = str(title or "")
+    m = _SERIES_TITLE.search(title)
+    if m:
+        return m.group(1)
+    plain = re.sub(r"#\S+", " ", title)
+    if not (_EP_ONE.search(plain) or _EP_RANGE.search(plain)):
+        return ""
+    m = _NAME_BRACKET.search(plain) or _NAME_BEFORE_EP.search(plain)
+    return m.group(1) if m else ""
+
+
 def series_key(series_id: str, series_name: str, title: str) -> tuple:
-    """(khóa series, tên series đã làm sạch). Tên lấy từ 合集 Douyin, hoặc 《tên phim》 trong mô tả nếu kênh không dùng 合集.
-    Gom theo TÊN (khóa "n:<tên bỏ dấu câu, khoảng trắng>"), để cùng một phim không bị tách đôi khi vừa nằm trong 合集
-    vừa có video lẻ ghi 《tên》. Không có tên mà có ID 合集 thì gom theo ID. Không nhận ra series thì ("", "")."""
-    if not series_name:
-        m = _SERIES_TITLE.search(str(title or ""))
-        series_name = m.group(1) if m else ""
-    name = clean_series_name(series_name)
-    norm = re.sub(r"[\W_]+", "", name).lower()
-    if norm:
+    """(khóa series, tên series đã làm sạch). Tên lấy từ 合集 Douyin, không có thì đọc từ caption (caption_series_name).
+    Gom theo TÊN (khóa "n:<series_norm>"), để cùng một phim không bị tách đôi khi vừa nằm trong 合集 vừa có video lẻ.
+    Tên chung chung ("AI漫剧", "短剧合集") hoặc không có tên: gom theo ID 合集 nếu có. Không nhận ra series thì ("", "")."""
+    name = clean_series_name(series_name or caption_series_name(title))
+    norm = series_norm(name)
+    if norm and not _GENERIC_NAME.fullmatch(norm):
         return f"n:{norm}", name
-    return (series_id, "") if series_id else ("", "")
+    return (series_id, name) if series_id else ("", "")
+
+
+def link_series(items: list, aliases: dict = None) -> None:
+    """Nối các khóa series của cùng một phim (sửa trực tiếp series_key / series_name của từng video).
+
+    1. Video trong 合集 mà caption ghi tên khác (合集 "瑞草学院", caption 《瑞草学院捉鬼师》): tên trong caption là cùng phim.
+    2. Cùng một kênh, tên này chứa trọn tên kia ("无赦之罪" và "无赦之罪第一季警察篇"): cùng phim, gom về tên ngắn.
+       Tên ngắn dưới 3 chữ không tính (dễ trùng nhầm, vd. "家").
+    3. Người dùng gộp / tách tay (aliases: {khóa: khóa đích}; khóa đích = chính nó nghĩa là giữ riêng, không gom tự động).
+    Khóa gốc trước khi nối được giữ ở series_key_raw để giao diện cho tách lại."""
+    aliases = aliases or {}
+    pinned = {k for k, t in aliases.items() if k == t}
+    parent, names = {}, {}
+
+    def find(k):
+        while parent.get(k, k) != k:
+            k = parent[k]
+        return k
+
+    def join(a, b, manual=False):  # đưa nhóm của a về nhóm của b
+        if not manual and (a in pinned or b in pinned):
+            return
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for item in items:
+        raw = item.get("series_key_raw") or item.get("series_key") or ""
+        item["series_key_raw"] = raw
+        item["series_name_raw"] = item.get("series_name_raw") or item.get("series_name", "")
+        if raw:
+            names.setdefault(raw, item["series_name_raw"])
+    for item in items:  # 1. tên trong caption của video thuộc 合集
+        cap = item.get("caption_key")
+        if cap and item["series_key_raw"] and cap != item["series_key_raw"]:
+            join(cap, item["series_key_raw"])
+    by_channel = {}
+    for item in items:  # 2. cùng kênh, tên chứa tên
+        channel = item.get("creator") or item.get("source_creator")
+        if channel and item["series_key_raw"].startswith("n:"):
+            by_channel.setdefault(channel, set()).add(item["series_key_raw"])
+    for keys in by_channel.values():
+        ordered = sorted(keys, key=len)
+        for i, short in enumerate(ordered):
+            if len(short) - 2 < 3:
+                continue
+            for long in ordered[i + 1:]:
+                if short[2:] in long[2:]:
+                    join(long, short)
+    for key, target in aliases.items():  # 3. gộp tay
+        if key != target:
+            join(key, target, manual=True)
+    # tên hiện cho cả nhóm: tên có nhiều video nhất (vd. "首尔今天有点鲁" 16 video, không phải "有点鲁" 1 video);
+    # bằng nhau thì ưu tiên tên ngắn hơn
+    counts = {}
+    for item in items:
+        if item["series_key_raw"]:
+            counts[item["series_key_raw"]] = counts.get(item["series_key_raw"], 0) + 1
+    best = {}
+    for raw, n in counts.items():
+        root = find(raw)
+        if root not in best or (n, -len(names[raw])) > (counts[best[root]], -len(names[best[root]])):
+            best[root] = raw
+    for item in items:
+        raw = item["series_key_raw"]
+        if raw:
+            root = find(raw)
+            item["series_key"] = root
+            item["series_name"] = names[best[root]] or item.get("series_name", "")
 
 
 def rights_flag(text: str) -> tuple:
@@ -894,10 +1025,15 @@ def series_summary(items: list, now: int) -> dict:
         out[sid] = {
             "name": next((v["series_name"] for v in vids if v.get("series_name")), ""),
             "channel": channel,  # link kênh theo dõi
+            "creator": next((v["creator"] for v in vids if v.get("creator")), ""),  # mã ẩn danh kênh đăng (mọi video)
             "author": newest.get("author", ""),
             "series_id": collection_id, "collection": bool(collection_id),  # có 合集 trên Douyin: mở được link series
-            # một câu mô tả video (bỏ hashtag) làm ngữ cảnh khi nhờ Gemini dịch tên phim
-            "sample": next((s for s in (" ".join(re.sub(r"#\S+", " ", v.get("title", "")).split())[:80] for v in vids) if s), ""),
+            # vài câu mô tả video (bỏ hashtag, khác nhau) làm ngữ cảnh khi nhờ Gemini dịch tên phim
+            "sample": " / ".join(list(dict.fromkeys(
+                s for s in (" ".join(re.sub(r"#\S+", " ", v.get("title", "")).split())[:70] for v in vids) if s))[:3]),
+            # các tên gốc đã được nối vào series này (tự động hoặc gộp tay): {khóa gốc: tên}, để giao diện cho tách lại
+            "members": dict(sorted({v.get("series_key_raw") or sid: v.get("series_name_raw") or v.get("series_name", "")
+                                    for v in vids}.items())),
             "status": status, "rights": worst[0], "rights_hit": worst[1],
             # episodes_total: tổng để hiện "tập 8/30" (caption ghi tổng thì dùng, không thì số Douyin báo đã ra)
             "max_episode": max_ep, "episodes_total": planned or total, "planned": planned,
@@ -957,6 +1093,8 @@ def normalize(platform: str, row: dict):
     rights, rights_hit = rights_flag(title)
     sid = re.sub(r"\D", "", str(row.get("series_id") or ""))[:30]
     skey, sname = series_key(sid, str(row.get("series_name") or "").strip()[:120], title)
+    # video thuộc 合集 mà caption ghi tên phim khác tên 合集: link_series nối hai tên này về một series
+    cap = series_key("", "", title)[0] if sid else ""
     return {
         "key": f"{platform}_{item_id}",
         "platform": platform,
@@ -972,6 +1110,8 @@ def normalize(platform: str, row: dict):
         "crawled": parse_time(row.get("last_modify_ts")),
         "keyword": str(row.get("source_keyword") or ""),
         "source_creator": str(row.get("source_creator") or ""),  # link kênh người dùng theo dõi (chế độ creator)
+        "creator": str(row.get("creator_hash") or "")[:64],  # mã ẩn danh của kênh đăng: biết hai video cùng một kênh
+        "caption_key": cap,
         "author": str(row.get("nickname") or ""),
         # series (合集 của Douyin): ID chỉ gồm số, app ghép thành link douyin.com/collection/<id>
         "series_id": sid,  # chỉ có khi là 合集 thật (mở được link collection)
@@ -1074,7 +1214,8 @@ def download_thumb(item: dict, data_dir: str):
 
 ITEM_FIELDS = ("key", "platform", "title", "url", "cover", "likes", "views", "comments", "shares", "collects",
                "published", "crawled", "keyword", "author", "source_creator",
-               "series_id", "series_key", "series_name", "episode", "episode_end", "episodes_total", "episodes_planned",
+               "series_id", "series_key", "series_key_raw", "caption_key", "creator", "series_name", "series_name_raw",
+               "episode", "episode_end", "episodes_total", "episodes_planned",
                "compilation", "finale", "rights", "rights_hit")
 
 
@@ -2466,15 +2607,58 @@ class Api:
             item["saved"] = item["key"] in saved
         for item in saved_items:
             item["saved"] = True
+        link_series(items + saved_items, load_series_alias(data_dir))  # nối các tên của cùng một phim + gộp/tách tay
         self._library = {**{i["key"]: i for i in saved_items}, **crawled}
         series = series_summary(list(self._library.values()), int(time.time()))
-        series_vi = load_series_vi(data_dir)
+        series_vi = resolve_series_vi(series, *read_series_vi(data_dir))
         missing = {s["name"]: s["sample"] for s in series.values()
                    if s["name"] and s["name"] not in series_vi and s["name"] not in self._vi_tried}
         if missing:
             self._translate_soon(dict(sorted(missing.items())))
         return {"items": items, "saved": saved_items, "last_run": self._settings.get("last_run", 0),
                 "series": series, "series_vi": series_vi}
+
+    def set_series_vi(self, name, vi) -> dict:
+        """Người dùng sửa tên Việt của một series. Để trống = bỏ bản sửa tay, quay về bản Gemini dịch."""
+        name, vi = str(name or "").strip(), " ".join(str(vi or "").split())[:80]
+        if not name:
+            return {"error": "Series không có tên"}
+        data_dir = self._data_dir()
+        manual = read_series_vi(data_dir)[1]
+        if vi:
+            manual[name] = vi
+        else:
+            manual.pop(name, None)
+            self._vi_tried.discard(name)  # chưa có bản Gemini thì cho dịch lại
+        save_series_vi(data_dir, manual=manual)
+        self._lib_rev += 1
+        return {"ok": True}
+
+    def merge_series(self, key, target) -> dict:
+        """Gộp tay series `key` vào series `target`. Lưu lại: video mới của series đó về sau cũng tự vào `target`."""
+        key, target = str(key or ""), str(target or "")
+        if not key or not target or key == target:
+            return {"error": "Chọn series khác để gộp vào"}
+        data_dir = self._data_dir()
+        aliases = load_series_alias(data_dir)
+        if aliases.get(target) not in (None, target):  # target đã gộp vào series khác: gộp thẳng vào đích cuối
+            target = aliases[target]
+        aliases[key] = target
+        write_json(series_alias_file(data_dir), aliases)
+        self._lib_rev += 1
+        return {"ok": True}
+
+    def split_series(self, key) -> dict:
+        """Tách tay một tên gốc khỏi series nó đang bị gộp vào; giữ riêng luôn (không gộp tự động nữa)."""
+        key = str(key or "")
+        if not key:
+            return {"error": "Không rõ series cần tách"}
+        data_dir = self._data_dir()
+        aliases = load_series_alias(data_dir)
+        aliases[key] = key
+        write_json(series_alias_file(data_dir), aliases)
+        self._lib_rev += 1
+        return {"ok": True}
 
     def _translate_soon(self, names: dict) -> None:
         """Dịch tên series chưa có bản dịch (chạy nền, cần Gemini). names = {tên: câu mô tả làm ngữ cảnh}.
@@ -2498,7 +2682,7 @@ class Api:
             if found:
                 with lock:  # các lô xong cùng lúc: ghi lần lượt để không mất bản dịch của nhau
                     data_dir = self._data_dir()
-                    save_series_vi(data_dir, {**load_series_vi(data_dir), **found})
+                    save_series_vi(data_dir, auto={**read_series_vi(data_dir)[0], **found})
                 self._lib_rev += 1  # giao diện tải lại để hiện tên đã dịch
             return ""
 

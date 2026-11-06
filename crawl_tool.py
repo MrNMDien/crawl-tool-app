@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.5.5"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.6.0"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -848,12 +848,112 @@ def load_follows(data_dir: str) -> dict:
     return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("url")} if isinstance(data, dict) else {}
 
 
-def write_follows(data_dir: str, channels: dict) -> None:
-    path = follows_file(data_dir)
+def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(channels, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(path)
+
+
+def deleted_file(data_dir: str) -> Path:
+    return Path(data_dir) / "follows_deleted.json"  # kênh đã bỏ theo dõi -> thời điểm bỏ (ms), để máy khác bỏ theo
+
+
+def load_deleted(data_dir: str) -> dict:
+    try:
+        data = json.loads(deleted_file(data_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: int(v) for k, v in data.items() if isinstance(v, (int, float))} if isinstance(data, dict) else {}
+
+
+def _without_updated(channel):
+    return {k: v for k, v in channel.items() if k != "updated"} if channel else None
+
+
+def write_follows(data_dir: str, channels: dict, touch: bool = True) -> None:
+    """touch=True (sửa trên máy này): kênh thay đổi được ghi giờ sửa "updated", kênh bị bỏ được ghi vào
+    follows_deleted.json. Đồng bộ dùng các mốc này để biết bản nào mới hơn. touch=False: ghi nguyên trạng."""
+    if touch:
+        now = int(time.time() * 1000)
+        old = load_follows(data_dir)
+        for key, channel in channels.items():
+            if _without_updated(channel) != _without_updated(old.get(key)):
+                channel["updated"] = now
+        gone = old.keys() - channels.keys()
+        if gone:
+            write_json(deleted_file(data_dir), {**load_deleted(data_dir), **{k: now for k in gone}})
+    write_json(follows_file(data_dir), channels)
+
+
+# ---------- Đồng bộ kênh theo dõi qua Supabase ----------
+# Mỗi máy đăng nhập cùng một tài khoản Supabase (email + mật khẩu). Bảng có RLS: tài khoản nào chỉ thấy dòng của mình.
+SYNC_EVERY = 300  # giây: kéo thay đổi từ máy khác khi app đang mở
+SYNC_SQL = """-- CrawlTool: bảng đồng bộ kênh theo dõi. Dán vào Supabase -> SQL Editor -> Run (chạy lại nhiều lần không sao).
+create table if not exists public.follows (
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  key text not null,
+  data jsonb not null default '{}'::jsonb,
+  deleted boolean not null default false,
+  updated bigint not null default 0,
+  primary key (user_id, key)
+);
+alter table public.follows enable row level security;
+drop policy if exists "crawltool_own_rows" on public.follows;
+create policy "crawltool_own_rows" on public.follows for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+"""
+
+
+def merge_follows(local: dict, deleted: dict, rows: list):
+    """Ghép kênh của máy này với các dòng trên Supabase. Mỗi kênh lấy bản sửa sau cùng (kể cả lệnh bỏ theo dõi);
+    riêng "known" (video đã thấy) gộp cả hai bên để không báo lại video máy kia đã báo.
+    Trả về (kênh, kênh đã bỏ, các dòng cần đẩy lên)."""
+    mine = {k: (int(c.get("updated", 0)), False, _without_updated(c)) for k, c in local.items()}
+    for key, ts in deleted.items():
+        if key not in mine or ts > mine[key][0]:
+            mine[key] = (ts, True, None)
+    theirs = {r["key"]: (int(r.get("updated") or 0), bool(r.get("deleted")), r.get("data") or None)
+              for r in rows if isinstance(r, dict) and r.get("key")}
+    channels, gone, push = {}, {}, []
+    for key in mine.keys() | theirs.keys():
+        a, b = mine.get(key), theirs.get(key)
+        ts, dead, data = max((x for x in (a, b) if x), key=lambda x: x[0])
+        if not dead and a and b and not a[1] and not b[1]:
+            data = {**data, "known": sorted(set(a[2].get("known", [])) | set(b[2].get("known", [])))}
+        if dead or not data or not data.get("url"):
+            gone[key] = ts
+            data, dead = {}, True
+        else:
+            channels[key] = {**data, "updated": ts}
+        if b != (ts, dead, data or None):
+            push.append({"key": key, "data": data, "deleted": dead, "updated": ts})
+    return channels, gone, push
+
+
+def supabase_call(url: str, key: str, path: str, method: str = "GET", body=None, token: str = "", headers=None):
+    req = urllib.request.Request(
+        url + path, method=method, data=None if body is None else json.dumps(body).encode(),
+        headers={"apikey": key, "Content-Type": "application/json", "User-Agent": APP_NAME,
+                 **({"Authorization": f"Bearer {token}"} if token else {}), **(headers or {})})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read()
+    return json.loads(raw) if raw else None
+
+
+def supabase_error(e: urllib.error.HTTPError) -> str:
+    try:
+        data = json.loads(e.read())
+    except (OSError, ValueError):
+        data = {}
+    msg = data.get("msg") or data.get("error_description") or data.get("message") or data.get("error") or f"HTTP {e.code}"
+    if data.get("code") in ("PGRST205", "42P01") or "public.follows" in str(msg):
+        return "Chưa có bảng follows: bấm \"Copy SQL tạo bảng\" rồi chạy trong Supabase → SQL Editor"
+    if "Invalid login credentials" in str(msg):
+        return "Sai email hoặc mật khẩu"
+    if "Invalid API key" in str(msg) or e.code == 401 and "apikey" in str(msg).lower():
+        return "Sai key của project (Project Settings → API Keys)"
+    return str(msg)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1107,6 +1207,8 @@ class Api:
         self._sig = None
         self._sig_checked = 0.0
         self._follow_lock = threading.Lock()
+        self._sync_lock = threading.Lock()
+        self._sync_access = None  # (access token, hết hạn lúc) của Supabase, chỉ giữ trong bộ nhớ
         self._movies_lock = threading.Lock()
         self._app_update = {}  # bản app mới hơn trên GitHub (nếu có)
         self._app_checked = 0.0
@@ -1333,16 +1435,25 @@ class Api:
             save_settings(self._settings)
             self._state = "idle"
             self._lib_rev += 1
+            self._sync()
 
     def _scheduler(self) -> None:
         """Chạy nền khi app mở: đến giờ thì tự kiểm tra kênh theo dõi (app đang bận thì đợi)."""
+        self._sync()
+        synced = time.time()
         while True:
             time.sleep(60)
+            if time.time() - synced >= SYNC_EVERY:
+                self._sync()
+                synced = time.time()
             if time.time() - self._app_checked > 6 * 3600:  # app mở lâu: 6 giờ hỏi bản app mới 1 lần
                 self._check_app_update()
             settings = self._follow_settings()
-            due = time.time() - settings["last_check"] >= settings["hours"] * 3600
-            if settings["auto"] and due and self._state == "idle" and load_follows(self._data_dir()):
+            channels = load_follows(self._data_dir())
+            # checked_at đồng bộ từ máy khác: máy kia vừa kiểm tra thì máy này chưa cần kiểm tra lại
+            last = max([settings["last_check"], *(c.get("checked_at", 0) for c in channels.values())])
+            due = time.time() - last >= settings["hours"] * 3600
+            if settings["auto"] and due and self._state == "idle" and channels:
                 self.check_follows()
 
     def follows(self) -> dict:
@@ -1372,6 +1483,7 @@ class Api:
             channels[key] = {"platform": platform, "url": url, "name": str(name or "").strip()[:60] or f"Kênh Douyin …{channel_id[-6:]}",
                              "added_at": int(time.time()), "known": [], "new": []}
             write_follows(self._data_dir(), channels)
+        self._sync_soon()
         return self.follows()
 
     def search_channels(self, query) -> dict:
@@ -1419,6 +1531,7 @@ class Api:
             channels = load_follows(self._data_dir())
             channels.pop(key, None)
             write_follows(self._data_dir(), channels)
+        self._sync_soon()
         return self.follows()
 
     def rename_channel(self, key, name) -> dict:
@@ -1427,6 +1540,7 @@ class Api:
             if key in channels and str(name or "").strip():
                 channels[key]["name"] = str(name).strip()[:60]
                 write_follows(self._data_dir(), channels)
+        self._sync_soon()
         return self.follows()
 
     def mark_seen(self, key=None) -> dict:
@@ -1436,6 +1550,7 @@ class Api:
                 if key in (None, k):
                     channel["new"] = []
             write_follows(self._data_dir(), channels)
+        self._sync_soon()
         return self.follows()
 
     def set_follow_settings(self, auto=None, hours=None) -> dict:
@@ -1455,6 +1570,7 @@ class Api:
             return {"error": "App đang bận, đợi xong rồi thử lại."}
         if not current_base(self._settings):
             return {"error": "Chưa có base code. Vào tab Cài đặt → Kiểm tra cập nhật."}
+        self._sync()  # lấy kênh mới thêm / video đã báo từ máy khác trước khi kiểm tra
         channels = {k: c for k, c in load_follows(self._data_dir()).items() if c.get("platform") in FOLLOW_PLATFORMS}
         if not channels:
             return {"error": "Chưa theo dõi kênh nào"}
@@ -1539,6 +1655,7 @@ class Api:
         return {
             "form": form, "data_dir": self._data_dir(),
             "warnings": warnings, "repo": APP_REPO, "login": self.get_login(), "gemini": self.get_gemini(), "tmdb": self.get_tmdb(),
+            "sync": self.get_sync(),
             "app_version": APP_VERSION, "can_self_update": bool(getattr(sys, "frozen", False)),
             "ai_topic": clean_topic(self._settings.get("ai_topic")),
         }
@@ -1629,6 +1746,112 @@ class Api:
         return self.get_gemini()
 
     # --- Lịch phim (TMDB) ---
+    # --- đồng bộ kênh theo dõi (Supabase) ---
+    def _sync_cfg(self) -> dict:
+        return dict(self._settings.get("sync") or {})
+
+    def get_sync(self) -> dict:
+        s = self._sync_cfg()
+        return {"url": s.get("url", ""), "has_key": bool(s.get("key")), "email": s.get("email", ""),
+                "logged_in": bool(s.get("refresh")), "last_sync": s.get("last_sync", 0), "problem": s.get("error", ""),
+                "sql": SYNC_SQL}
+
+    def sync_login(self, url, key, email, password) -> dict:
+        url = str(url or "").strip().rstrip("/")
+        key, email, password = str(key or "").strip(), str(email or "").strip(), str(password or "")
+        old = self._sync_cfg()
+        if not key and old.get("key") and old.get("url") == url:
+            key = decrypt_token(old["key"])  # đăng nhập lại: dùng key đã lưu
+        if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?", url):
+            return {"error": "Project URL có dạng https://xxxx.supabase.co"}
+        if not (key and email and password):
+            return {"error": "Điền đủ Project URL, key, email và mật khẩu"}
+        try:
+            data = supabase_call(url, key, "/auth/v1/token?grant_type=password", "POST",
+                                 {"email": email, "password": password})
+        except urllib.error.HTTPError as e:
+            return {"error": f"Đăng nhập Supabase thất bại: {supabase_error(e)}"}
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            return {"error": f"Không kết nối được Supabase: {e}"}
+        with self._sync_lock:
+            self._settings["sync"] = {"url": url, "key": encrypt_token(key), "email": email,
+                                      "refresh": encrypt_token(data["refresh_token"]), "last_sync": 0, "error": ""}
+            self._sync_access = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 120)
+            save_settings(self._settings)
+        self._write(f"Đã đăng nhập Supabase ({email}), đang đồng bộ kênh theo dõi...")
+        self._sync()
+        return self.get_sync()
+
+    def sync_logout(self) -> dict:
+        with self._sync_lock:
+            s = self._sync_cfg()
+            s.pop("refresh", None)
+            s["error"] = ""
+            self._settings["sync"] = s
+            self._sync_access = None
+            save_settings(self._settings)
+        return self.get_sync()
+
+    def sync_now(self) -> dict:
+        self._sync()
+        return self.get_sync()
+
+    def _sync_soon(self) -> None:
+        if self._sync_cfg().get("refresh"):
+            threading.Thread(target=self._sync, daemon=True).start()
+
+    def _sync_token(self, s: dict, key: str) -> str:
+        if self._sync_access and time.time() < self._sync_access[1]:
+            return self._sync_access[0]
+        data = supabase_call(s["url"], key, "/auth/v1/token?grant_type=refresh_token", "POST",
+                             {"refresh_token": decrypt_token(s["refresh"])})
+        s["refresh"] = encrypt_token(data["refresh_token"])  # Supabase đổi refresh token mỗi lần dùng: phải lưu lại
+        self._settings["sync"] = s
+        save_settings(self._settings)
+        self._sync_access = (data["access_token"], time.time() + int(data.get("expires_in", 3600)) - 120)
+        return self._sync_access[0]
+
+    def _sync(self) -> None:
+        """Kéo kênh từ Supabase, ghép với máy này, đẩy phần mới hơn lên. Lỗi chỉ ghi lại, không làm hỏng việc khác."""
+        if not self._sync_cfg().get("refresh"):
+            return
+        with self._sync_lock:
+            s = self._sync_cfg()
+            if not s.get("refresh"):
+                return
+            old_error = s.get("error", "")
+            refreshing = not (self._sync_access and time.time() < self._sync_access[1])
+            try:
+                key = decrypt_token(s["key"])
+                token = self._sync_token(s, key)
+                refreshing = False
+                rows = supabase_call(s["url"], key, "/rest/v1/follows?select=key,data,deleted,updated", token=token)
+                with self._follow_lock:
+                    data_dir = self._data_dir()
+                    before = load_follows(data_dir)
+                    channels, gone, push = merge_follows(before, load_deleted(data_dir), rows or [])
+                    write_follows(data_dir, channels, touch=False)
+                    write_json(deleted_file(data_dir), gone)
+                if push:
+                    supabase_call(s["url"], key, "/rest/v1/follows?on_conflict=user_id,key", "POST", push, token,
+                                  {"Prefer": "resolution=merge-duplicates,return=minimal"})
+                if channels != before:
+                    self._lib_rev += 1
+                s.update(last_sync=int(time.time()), error="")
+            except urllib.error.HTTPError as e:
+                msg = supabase_error(e)
+                if refreshing and e.code in (400, 401):
+                    s.pop("refresh", None)  # phiên đăng nhập Supabase không còn dùng được
+                    msg = "Phiên đăng nhập Supabase đã hết, đăng nhập lại trong Cài đặt"
+                s["error"] = msg
+                self._write(f"[LỖI] Đồng bộ Supabase: {msg}")
+            except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+                s["error"] = f"Không kết nối được Supabase: {e}"
+            self._settings["sync"] = s
+            save_settings(self._settings)
+            if s.get("error", "") != old_error or not s.get("refresh"):
+                self._lib_rev += 1  # giao diện cập nhật trạng thái đồng bộ
+
     def _tmdb_key(self) -> str:
         blob = (self._settings.get("tmdb") or {}).get("key")
         try:

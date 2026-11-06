@@ -762,8 +762,129 @@ def test_movie_calendar():
             ct.MOVIES_FILE, ct.fetch_movie_calendar, ct.SETTINGS_FILE = old_file, old_fetch, old_settings
 
 
+def test_supabase_sync():
+    """2 máy đăng nhập cùng tài khoản Supabase (server giả): theo dõi, đổi tên, bỏ theo dõi ở máy này thì máy kia thấy."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse, parse_qs
+
+    db = {}  # key -> row (1 tài khoản)
+    tokens = {"n": 0, "valid": set()}  # mỗi lần đăng nhập có refresh token riêng, dùng 1 lần là đổi
+    calls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def reply(self, code, body=None):
+            data = b"" if body is None else json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            calls.append(("GET", self.path))
+            if self.headers.get("apikey") != "pk" or not self.headers.get("Authorization", "").startswith("Bearer at"):
+                return self.reply(401, {"message": "no auth"})
+            self.reply(200, list(db.values()))
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            url = urlparse(self.path)
+            calls.append(("POST", url.path))
+            if self.headers.get("apikey") != "pk":
+                return self.reply(401, {"message": "Invalid API key"})
+            if url.path == "/auth/v1/token":
+                grant = parse_qs(url.query)["grant_type"][0]
+                if grant == "password" and (body["email"], body["password"]) != ("a@b.c", "pw"):
+                    return self.reply(400, {"error_description": "Invalid login credentials"})
+                if grant == "refresh_token":
+                    if body["refresh_token"] not in tokens["valid"]:
+                        return self.reply(400, {"error_description": "Invalid Refresh Token"})
+                    tokens["valid"].discard(body["refresh_token"])
+                tokens["n"] += 1
+                tokens["valid"].add(f"rt{tokens['n']}")
+                return self.reply(200, {"access_token": "at", "refresh_token": f"rt{tokens['n']}", "expires_in": 3600})
+            for row in body:  # upsert theo (user, key)
+                db[row["key"]] = row
+            self.reply(201)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    old = ct.save_settings, ct.Api._sync_soon, ct.re.fullmatch
+    ct.save_settings = lambda settings: None
+    ct.Api._sync_soon = lambda self: self._sync()  # chạy ngay để test không phải chờ luồng nền
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            machines = []
+            for name in ("A", "B"):
+                api = ct.Api()
+                api._settings = {"data_dir": str(Path(tmp) / name)}
+                machines.append(api)
+            a, b = machines
+            assert a.sync_login("http://x.supabase.co", "pk", "a@b.c", "pw")["error"].startswith("Project URL")
+            # server giả chạy http://127.0.0.1; bản thật bắt buộc https
+            real = old[2]
+            ct.re.fullmatch = lambda pat, text, *f: True if pat.startswith("https://") else real(pat, text, *f)
+            assert "Sai email" in a.sync_login(url, "pk", "a@b.c", "sai")["error"]
+            a.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhA", "Kênh A")  # có trước khi đăng nhập
+            res = a.sync_login(url, "pk", "a@b.c", "pw")
+            assert res["logged_in"] and not res["problem"], res
+            assert '"pk"' not in json.dumps(a._settings)  # key lưu mã hóa
+            assert list(db) == ["dy_MS4wLjABAAAAkenhA"]
+
+            assert b.sync_login(url, "", "a@b.c", "pw")["error"]  # máy mới chưa lưu key thì phải dán key
+            b.sync_login(url, "pk", "a@b.c", "pw")
+            assert [c["name"] for c in b.follows()["channels"]] == ["Kênh A"]
+
+            b.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhB", "Kênh B")
+            b.rename_channel("dy_MS4wLjABAAAAkenhA", "Tên mới")
+            a.sync_now()
+            assert sorted(c["name"] for c in a.follows()["channels"]) == ["Kênh B", "Tên mới"]
+
+            time.sleep(0.002)
+            a.unfollow("dy_MS4wLjABAAAAkenhB")
+            b.sync_now()
+            assert [c["name"] for c in b.follows()["channels"]] == ["Tên mới"]  # bỏ theo dõi ở A thì B cũng bỏ
+            assert db["dy_MS4wLjABAAAAkenhB"]["deleted"]
+
+            # video đã thấy (known) gộp cả 2 máy, để máy kia không báo lại
+            key = "dy_MS4wLjABAAAAkenhA"
+            for m, vid in ((a, "v1"), (b, "v2")):
+                time.sleep(0.002)
+                with m._follow_lock:
+                    ch = ct.load_follows(m._data_dir())
+                    ch[key]["known"] = [vid]
+                    ct.write_follows(m._data_dir(), ch)
+            a.sync_now(); b.sync_now(); a.sync_now()
+            for m in (a, b):
+                assert ct.load_follows(m._data_dir())[key]["known"] == ["v1", "v2"]
+            pushes = calls.count(("POST", "/rest/v1/follows"))
+            a.sync_now(); b.sync_now()
+            assert calls.count(("POST", "/rest/v1/follows")) == pushes  # không đổi gì thì không đẩy
+
+            # access token hết hạn: tự lấy token mới bằng refresh token (đổi mỗi lần) và lưu lại
+            a._sync_access = None
+            assert not a.sync_now()["problem"]
+            a._sync_access = None
+            assert not a.sync_now()["problem"]  # dùng được refresh token mới vừa lưu
+            # phiên của B bị thu hồi (vd. đổi mật khẩu): báo đăng nhập lại
+            tokens["valid"].discard(ct.decrypt_token(b._settings["sync"]["refresh"]))
+            b._sync_access = None
+            res = b.sync_now()
+            assert not res["logged_in"] and "đăng nhập lại" in res["problem"]
+            assert not a.sync_logout()["logged_in"]
+    finally:
+        ct.save_settings, ct.Api._sync_soon, ct.re.fullmatch = old
+        server.shutdown()
+
+
 if __name__ == "__main__":
     test_movie_calendar()
+    test_supabase_sync()
     test_build_args()
     test_build_jobs()
     test_login_settings()

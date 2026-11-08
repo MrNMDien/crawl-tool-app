@@ -347,6 +347,7 @@
   .user-result .who { min-width: 0; }
   .user-result .who b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .user-result .who span { display: block; font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-result .who span.followed-as { color: var(--accent); font-weight: 700; }
   .channel { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
   .channel .top { display: flex; align-items: center; gap: 8px; }
   .channel .top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -791,10 +792,13 @@ function toast(msg, isErr) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => (t.className = ""), 2600);
 }
-function confirmBox(title, text) {
+// yes: nhãn nút đồng ý; nút đỏ chỉ dùng cho việc xóa/bỏ, việc thường thì truyền nhãn khác để nút thành màu chính
+function confirmBox(title, text, yes) {
   return new Promise((resolve) => {
     $("confirm-title").textContent = title;
     $("confirm-text").textContent = text;
+    $("confirm-yes").textContent = yes || "Đồng ý";
+    $("confirm-yes").className = "btn " + (yes ? "primary" : "danger-fill");
     $("confirm-modal").classList.add("open");
     const done = (v) => { $("confirm-modal").classList.remove("open"); resolve(v); };
     $("confirm-yes").onclick = () => done(true);
@@ -1594,6 +1598,11 @@ $("fl-add").onclick = async () => {
   btn.disabled = true;
   try {
     const res = await api().follow_channel($("fl-url").value, $("fl-name").value);
+    if (res.duplicate) {
+      $("fl-url").value = "";
+      $("fl-name").value = "";
+      return showDuplicate(res.duplicate);
+    }
     if (res.error) return toast(res.error, true);
     $("fl-url").value = "";
     $("fl-name").value = "";
@@ -1604,6 +1613,11 @@ $("fl-add").onclick = async () => {
   }
 };
 $("fl-url").onkeydown = (e) => e.key === "Enter" && $("fl-add").click();
+// Bấm theo dõi kênh đã có: nói rõ là kênh nào trong danh sách (tên tự đặt có thể khác hẳn tên kênh) và mở được ngay
+async function showDuplicate(d) {
+  const since = d.added_at ? ` từ ${new Date(d.added_at * 1000).toLocaleDateString("vi-VN")}` : "";
+  if (await confirmBox("Kênh này đã có trong danh sách", `Đã theo dõi với tên "${d.name}"${since}. Không thêm lần nữa.`, "Mở kênh")) openFollowDetail(d.key);
+}
 function renderUserResults(results) {
   const box = $("fl-results");
   box.replaceChildren(...results.map((u) => {
@@ -1614,17 +1628,37 @@ function renderUserResults(results) {
     who.append(el("b", "", u.nickname || "(không tên)"));
     who.append(el("span", "", [u.douyin_id && "ID: " + u.douyin_id, `${fmt.format(u.followers)} người theo dõi`, `${u.videos} video`].filter(Boolean).join(" · ")));
     if (u.signature) who.append(el("span", "", u.signature));
-    const btn = el("button", "btn sm" + (u.followed ? "" : " primary"), u.followed ? "Đã theo dõi" : "Theo dõi");
-    btn.disabled = u.followed;
-    btn.onclick = async () => {
-      const res = await api().follow_channel(u.url, u.nickname, u.avatar_url || "");
-      if (res.error) return toast(res.error, true);
-      u.followed = true;
-      btn.textContent = "Đã theo dõi";
+    const btn = el("button", "btn sm");
+    const markFollowed = (key, name) => {
+      Object.assign(u, { followed: true, followed_key: key, followed_name: name });
+      who.querySelector(".followed-as")?.remove();
+      who.append(el("span", "followed-as", `Đã theo dõi: ${name}`));
+      btn.textContent = "Mở kênh";
       btn.className = "btn sm";
+      btn.title = "Kênh đã có trong danh sách theo dõi";
+    };
+    if (u.followed) markFollowed(u.followed_key, u.followed_name);
+    else {
+      btn.textContent = "Theo dõi";
+      btn.className = "btn sm primary";
+    }
+    btn.onclick = async () => {
+      if (u.followed) return openFollowDetail(u.followed_key);
       btn.disabled = true;
-      renderFollows(res);
-      toast(`Đã theo dõi ${u.nickname}`);
+      try {
+        const res = await api().follow_channel(u.url, u.nickname, u.avatar_url || "");
+        if (res.duplicate) {  // máy khác của tài khoản này vừa theo dõi, sau lúc tìm
+          markFollowed(res.duplicate.key, res.duplicate.name);
+          return showDuplicate(res.duplicate);
+        }
+        if (res.error) return toast(res.error, true);
+        const key = "dy_" + u.sec_uid;
+        renderFollows(res);
+        markFollowed(key, (res.channels.find((c) => c.key === key) || {}).name || u.nickname);
+        toast(`Đã theo dõi ${u.nickname}`);
+      } finally {
+        btn.disabled = false;
+      }
     };
     row.append(img, who, btn);
     return row;

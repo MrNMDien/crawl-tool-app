@@ -329,8 +329,10 @@ def test_follow_check_end_to_end():
             assert api.check_follows()["error"] == "Chưa theo dõi kênh nào"
             res = api.follow_channel(f"https://www.douyin.com/user/{sec}", "Kênh thử")
             assert res["channels"][0]["name"] == "Kênh thử"
-            assert api.follow_channel(sec)["error"]  # trùng
             key = res["channels"][0]["key"]
+            dup = api.follow_channel(f"Xem kênh này https://www.douyin.com/share/user/{sec}?from=app", "Tên khác")  # trùng
+            assert dup["duplicate"]["key"] == key and dup["duplicate"]["name"] == "Kênh thử"
+            assert '"Kênh thử"' in dup["error"] and len(ct.load_follows(str(data))) == 1
             assert api.rename_channel(key, "  Tên tự đặt  ")["channels"][0]["name"] == "Tên tự đặt"
             assert api.rename_channel(key, "   ")["channels"][0]["name"] == "Tên tự đặt"  # tên trống thì giữ tên cũ
             api.rename_channel(key, "Kênh thử")
@@ -451,6 +453,7 @@ def test_search_channels():
             assert a["url"] == "https://www.douyin.com/user/MS4wLjABAAAAkenhA" and a["followers"] == 12000
             assert a["avatar"].startswith("data:image/jpeg;base64,") and b["avatar"] == ""
             assert a["followed"] is False and b["followed"] is True
+            assert b["followed_key"] == "dy_MS4wLjABAAAAkenhB" and b["followed_name"] == "Kênh B" and "followed_name" not in a
             assert "USER_SEARCH_RESULT" not in "\n".join(api._lines) and "Tìm thấy 2 kênh" in "\n".join(api._lines)
             assert api._state == "idle"
         finally:

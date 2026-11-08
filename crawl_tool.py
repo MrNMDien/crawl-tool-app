@@ -32,7 +32,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.8.4"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.8.5"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -1317,6 +1317,11 @@ STALE_DAYS = 5  # kênh không đăng video mới quá số ngày này thì gắ
 MACHINE_NAME = (os.environ.get("COMPUTERNAME") or "Máy này")[:40]
 
 
+def follow_key(platform: str, channel_id: str) -> str:
+    """Mã của kênh trong danh sách theo dõi: cùng kênh thì cùng mã, dù dán link dạng nào."""
+    return f"{platform}_{safe_key(channel_id)}"
+
+
 def follows_file(data_dir: str) -> Path:
     return Path(data_dir) / "follows.json"
 
@@ -2016,11 +2021,14 @@ class Api:
             platform, url, channel_id = parse_channel(text)
         except ValueError as e:
             return {"error": str(e)}
-        key = f"{platform}_{safe_key(channel_id)}"
+        key = follow_key(platform, channel_id)
         with self._follow_lock:
             channels = load_follows(self._data_dir())
-            if key in channels:
-                return {"error": "Kênh này đã có trong danh sách theo dõi"}
+            if key in channels:  # trùng: chỉ rõ là kênh nào (tên anh đã đặt có thể khác hẳn tên kênh)
+                old = channels[key]
+                since = datetime.fromtimestamp(old["added_at"]).strftime(" từ %d/%m/%Y") if old.get("added_at") else ""
+                return {"error": f"Kênh này đã có trong danh sách: \"{old.get('name', '')}\"{since}",
+                        "duplicate": {"key": key, "name": old.get("name", ""), "added_at": old.get("added_at", 0)}}
             channels[key] = {"platform": platform, "url": url, "name": str(name or "").strip()[:60] or f"Kênh Douyin …{channel_id[-6:]}",
                              "added_at": int(time.time()), "known": [], "new": []}
             if str(avatar or "").startswith("https://"):  # theo dõi từ kết quả tìm kênh: có sẵn ảnh đại diện
@@ -2055,11 +2063,14 @@ class Api:
             if line is None:
                 return {"error": "Không tìm được kênh, xem Nhật ký ở tab Crawl để biết lý do."}
             results = parse_user_results(line)
-            followed = {c["url"] for c in load_follows(self._data_dir()).values()}
+            followed = load_follows(self._data_dir())
             with ThreadPoolExecutor(max_workers=8) as pool:
                 avatars = list(pool.map(lambda r: fetch_image(r["avatar"], THUMB_REFERER["dy"]), results))
             for result, avatar in zip(results, avatars):
-                result["followed"] = result["url"] in followed
+                key = follow_key("dy", result["sec_uid"])  # so theo mã kênh như lúc bấm Theo dõi, không theo link
+                result["followed"] = key in followed
+                if result["followed"]:
+                    result["followed_key"], result["followed_name"] = key, followed[key].get("name", "")
                 result["avatar_url"] = result["avatar"]  # link gốc, để lưu ảnh đại diện khi bấm Theo dõi
                 result["avatar"] = f"data:{image_mime(avatar)};base64,{base64.b64encode(avatar).decode()}" if avatar else ""
             self._write(f"Tìm thấy {len(results)} kênh.")

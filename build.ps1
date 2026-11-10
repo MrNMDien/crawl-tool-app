@@ -7,6 +7,12 @@ python test_crawl_tool.py
 if ($LASTEXITCODE -ne 0) { Write-Host "Test thất bại, dừng build."; exit 1 }
 # Gói base code (bản đã commit của ..\MediaCrawler) vào exe: người dùng không cần token hay tải gì từ repo riêng
 $base = Join-Path $PSScriptRoot "..\MediaCrawler"
+# Nhiều nơi cùng sửa code: build từ bản cũ hơn GitHub sẽ làm mất bản sửa của nơi khác (vd. base cũ cài thư viện lỗi 403)
+foreach ($repo in @($PSScriptRoot, $base)) {
+    git -C $repo fetch -q
+    $behind = git -C $repo rev-list --count "HEAD..@{u}"
+    if ($LASTEXITCODE -ne 0 -or [int]$behind -gt 0) { Write-Host "$repo chậm hơn GitHub $behind commit: git pull rồi build lại."; exit 1 }
+}
 if (git -C $base status --porcelain) { Write-Host "Base code còn thay đổi chưa commit, dừng build."; exit 1 }
 git -C $base archive --format=zip --prefix=MediaCrawler/ -o (Join-Path $PSScriptRoot "base.zip") HEAD
 if ($LASTEXITCODE -ne 0) { Write-Host "Không gói được base code, dừng build."; exit 1 }

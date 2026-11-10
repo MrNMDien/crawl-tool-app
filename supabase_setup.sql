@@ -12,3 +12,17 @@ alter table public.follows enable row level security;
 drop policy if exists "crawltool_own_rows" on public.follows;
 create policy "crawltool_own_rows" on public.follows for all to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Blacklist (kênh không cho theo dõi): cùng cấu trúc, cùng quy tắc mỗi tài khoản chỉ thấy dòng của mình.
+create table if not exists public.blacklist (
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  key text not null,
+  data jsonb not null default '{}'::jsonb,
+  deleted boolean not null default false,
+  updated bigint not null default 0,
+  primary key (user_id, key)
+);
+alter table public.blacklist enable row level security;
+drop policy if exists "crawltool_own_rows" on public.blacklist;
+create policy "crawltool_own_rows" on public.blacklist for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());

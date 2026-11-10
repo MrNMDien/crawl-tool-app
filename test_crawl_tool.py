@@ -824,7 +824,9 @@ def test_supabase_sync():
 
     accounts = {"a@b.c": {"password": "pw", "id": "u1"}, "x@y.z": {"password": "pw2", "id": "u2"}}
     account = accounts["a@b.c"]
-    rows = {"u1": {}, "u2": {}}  # như RLS: mỗi tài khoản một tập dòng riêng
+    # như RLS: mỗi tài khoản một tập dòng riêng; mỗi bảng (follows, blacklist) riêng
+    tables = {u: {"follows": {}, "blacklist": {}} for u in ("u1", "u2")}
+    rows = {u: t["follows"] for u, t in tables.items()}
     db = rows["u1"]
     tokens = {"n": 0, "valid": {}}  # refresh token -> tài khoản; mỗi lần đăng nhập 1 token riêng, dùng 1 lần là đổi
     calls = []
@@ -857,7 +859,10 @@ def test_supabase_sync():
             calls.append(("GET", self.path))
             if self.headers.get("apikey") != "pk" or not self.uid():
                 return self.reply(401, {"message": "no auth"})
-            self.reply(200, list(rows[self.uid()].values()))
+            table = urlparse(self.path).path.rsplit("/", 1)[-1]
+            if table not in tables[self.uid()]:
+                return self.reply(404, {"code": "PGRST205", "message": f"Could not find the table 'public.{table}'"})
+            self.reply(200, list(tables[self.uid()][table].values()))
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -883,7 +888,7 @@ def test_supabase_sync():
             if not self.uid():
                 return self.reply(401, {"message": "no auth"})
             for row in body:  # upsert theo (user, key): ghi vào đúng tài khoản trong token
-                rows[self.uid()][row["key"]] = row
+                tables[self.uid()][url.path.rsplit("/", 1)[-1]][row["key"]] = row
             self.reply(201)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -961,6 +966,40 @@ def test_supabase_sync():
             assert b.sync_login("a@b.c", "matkhaumoi1")["logged_in"]
             assert not a.sync_logout()["logged_in"]
             assert a.sync_change_password("matkhaumoi1", "khac12345")["error"]  # đã đăng xuất
+
+            # blacklist: đưa kênh vào blacklist ở máy A thì máy B bỏ theo dõi và không theo dõi lại được
+            assert a.sync_login("a@b.c", "matkhaumoi1")["logged_in"]  # A vừa đăng xuất ở trên
+            a.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhBL", "Kênh xấu")
+            b.sync_now()
+            assert "dy_MS4wLjABAAAAkenhBL" in [c["key"] for c in b.follows()["channels"]]
+            res = a.blacklist_channels(["dy_MS4wLjABAAAAkenhBL"])
+            assert [c["name"] for c in res["blacklist"]] == ["Kênh xấu"]
+            assert "dy_MS4wLjABAAAAkenhBL" not in [c["key"] for c in res["channels"]]
+            assert "Blacklist" in a.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhBL")["error"]
+            assert tables["u1"]["blacklist"]["dy_MS4wLjABAAAAkenhBL"]["data"]["name"] == "Kênh xấu"
+            b.sync_now()
+            res = b.follows()
+            assert "dy_MS4wLjABAAAAkenhBL" not in [c["key"] for c in res["channels"]]
+            assert [c["key"] for c in res["blacklist"]] == ["dy_MS4wLjABAAAAkenhBL"]
+            assert "Blacklist" in b.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhBL")["error"]
+            # gỡ khỏi blacklist ở B: A cũng gỡ, theo dõi lại được
+            b.unblacklist("dy_MS4wLjABAAAAkenhBL")
+            a.sync_now()
+            assert a.follows()["blacklist"] == []
+            assert "error" not in a.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhBL")
+            a.unfollow("dy_MS4wLjABAAAAkenhBL")
+            # thêm thẳng bằng link (kênh chưa theo dõi), trùng thì báo
+            assert a.blacklist_add("https://www.douyin.com/user/MS4wLjABAAAAkenhZ", "Z")["blacklist"][0]["name"] == "Z"
+            assert a.blacklist_add("MS4wLjABAAAAkenhZ")["error"]
+            a.unblacklist("dy_MS4wLjABAAAAkenhZ")
+            # máy chủ chưa có bảng blacklist (chủ app chưa chạy SQL mới): kênh theo dõi vẫn đồng bộ, chỉ cảnh báo 1 lần
+            saved_bl = tables["u1"].pop("blacklist")
+            a.follow_channel("https://www.douyin.com/user/MS4wLjABAAAAkenhY", "Y")
+            assert not a.sync_now()["problem"] and "dy_MS4wLjABAAAAkenhY" in tables["u1"]["follows"]
+            a.sync_now()
+            assert sum("chưa có bảng blacklist" in line for line in a._lines) == 1
+            tables["u1"]["blacklist"] = saved_bl
+            a.unfollow("dy_MS4wLjABAAAAkenhY")
 
             # cùng máy A, người khác đăng nhập: không thấy và không nhận nhầm kênh của tài khoản trước
             mine = sorted(ct.load_follows(a._data_dir()))

@@ -32,7 +32,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 APP_NAME = "CrawlTool"
-APP_VERSION = "1.8.5"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
+APP_VERSION = "1.9.1"  # tăng mỗi lần phát hành (release.ps1 đọc số này)
 APP_RELEASE_PREFIX = "app-v"  # tag dạng app-v1.2.3
 APP_REPO = "MrNMDien/CrawlTool"  # repo public: Releases chứa CrawlTool.exe (đã gói sẵn base code), không cần token
 
@@ -1322,13 +1322,14 @@ def follow_key(platform: str, channel_id: str) -> str:
     return f"{platform}_{safe_key(channel_id)}"
 
 
-def follows_file(data_dir: str) -> Path:
-    return Path(data_dir) / "follows.json"
+# kind: "follows" = kênh đang theo dõi, "blacklist" = kênh bị chặn (không cho theo dõi). Cùng định dạng, cùng cách đồng bộ.
+def follows_file(data_dir: str, kind: str = "follows") -> Path:
+    return Path(data_dir) / f"{kind}.json"
 
 
-def load_follows(data_dir: str) -> dict:
+def load_follows(data_dir: str, kind: str = "follows") -> dict:
     try:
-        data = json.loads(follows_file(data_dir).read_text(encoding="utf-8"))
+        data = json.loads(follows_file(data_dir, kind).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("url")} if isinstance(data, dict) else {}
@@ -1341,13 +1342,13 @@ def write_json(path: Path, data) -> None:
     tmp.replace(path)
 
 
-def deleted_file(data_dir: str) -> Path:
-    return Path(data_dir) / "follows_deleted.json"  # kênh đã bỏ theo dõi -> thời điểm bỏ (ms), để máy khác bỏ theo
+def deleted_file(data_dir: str, kind: str = "follows") -> Path:
+    return Path(data_dir) / f"{kind}_deleted.json"  # kênh đã bỏ -> thời điểm bỏ (ms), để máy khác bỏ theo
 
 
-def load_deleted(data_dir: str) -> dict:
+def load_deleted(data_dir: str, kind: str = "follows") -> dict:
     try:
-        data = json.loads(deleted_file(data_dir).read_text(encoding="utf-8"))
+        data = json.loads(deleted_file(data_dir, kind).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return {k: int(v) for k, v in data.items() if isinstance(v, (int, float))} if isinstance(data, dict) else {}
@@ -1357,19 +1358,19 @@ def _without_updated(channel):
     return {k: v for k, v in channel.items() if k != "updated"} if channel else None
 
 
-def write_follows(data_dir: str, channels: dict, touch: bool = True) -> None:
+def write_follows(data_dir: str, channels: dict, touch: bool = True, kind: str = "follows") -> None:
     """touch=True (sửa trên máy này): kênh thay đổi được ghi giờ sửa "updated", kênh bị bỏ được ghi vào
     follows_deleted.json. Đồng bộ dùng các mốc này để biết bản nào mới hơn. touch=False: ghi nguyên trạng."""
     if touch:
         now = int(time.time() * 1000)
-        old = load_follows(data_dir)
+        old = load_follows(data_dir, kind)
         for key, channel in channels.items():
             if _without_updated(channel) != _without_updated(old.get(key)):
                 channel["updated"] = now
         gone = old.keys() - channels.keys()
         if gone:
-            write_json(deleted_file(data_dir), {**load_deleted(data_dir), **{k: now for k in gone}})
-    write_json(follows_file(data_dir), channels)
+            write_json(deleted_file(data_dir, kind), {**load_deleted(data_dir, kind), **{k: now for k in gone}})
+    write_json(follows_file(data_dir, kind), channels)
 
 
 # ---------- Đồng bộ kênh theo dõi qua Supabase ----------
@@ -1377,6 +1378,7 @@ def write_follows(data_dir: str, channels: dict, touch: bool = True) -> None:
 # Người dùng chỉ đăng nhập bằng email + mật khẩu chủ app cấp. Bảng có RLS: tài khoản nào chỉ thấy dòng của mình.
 # Tạo bảng: supabase_setup.sql (chủ app chạy 1 lần).
 SYNC_EVERY = 300  # giây: kéo thay đổi từ máy khác khi app đang mở
+SYNC_KINDS = ("blacklist", "follows")  # mỗi loại một bảng Supabase cùng tên; blacklist trước để loại kênh bị chặn
 
 
 def bundled_supabase() -> dict:
@@ -1434,8 +1436,8 @@ def supabase_error(e: urllib.error.HTTPError) -> str:
     except (OSError, ValueError):
         data = {}
     msg = data.get("msg") or data.get("error_description") or data.get("message") or data.get("error") or f"HTTP {e.code}"
-    if data.get("code") in ("PGRST205", "42P01") or "public.follows" in str(msg):
-        return "Máy chủ đồng bộ chưa sẵn sàng (thiếu bảng follows), báo người quản trị"
+    if data.get("code") in ("PGRST205", "42P01") or "public.follows" in str(msg) or "public.blacklist" in str(msg):
+        return "Máy chủ đồng bộ chưa sẵn sàng (thiếu bảng dữ liệu), báo người quản trị"
     if "Invalid login credentials" in str(msg):
         return "Sai email hoặc mật khẩu"
     if "Invalid API key" in str(msg) or e.code == 401 and "apikey" in str(msg).lower():
@@ -1719,6 +1721,7 @@ class Api:
         self._follow_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._sync_access = None  # (access token, hết hạn lúc) của Supabase, chỉ giữ trong bộ nhớ
+        self._sync_missing = set()  # bảng Supabase chưa có (đã báo 1 lần)
         self._avatar_pending = set()  # kênh đang tải ảnh đại diện (máy khác đồng bộ sang, chưa có file)
         self._movies_lock = threading.Lock()
         self._vi_running = False  # đang dịch tên series bằng Gemini
@@ -2014,6 +2017,10 @@ class Api:
                          "chat_name": tg.get("chat_name", ""), "enabled": tg.get("enabled", True)},
             "hours_options": list(FOLLOW_HOURS),
             "tags": CHANNEL_TAGS, "stale_days": STALE_DAYS,
+            "blacklist": sorted(({"key": k, "platform": c.get("platform"), "url": c["url"], "name": c.get("name", ""),
+                                  "added_at": c.get("added_at", 0), "avatar": self._avatar(k, c)}
+                                 for k, c in load_follows(self._data_dir(), "blacklist").items()),
+                                key=lambda c: -c["added_at"]),
         }
 
     def follow_channel(self, text, name="", avatar="") -> dict:
@@ -2023,10 +2030,13 @@ class Api:
             return {"error": str(e)}
         key = follow_key(platform, channel_id)
         with self._follow_lock:
+            if key in load_follows(self._data_dir(), "blacklist"):
+                return {"error": "Kênh này đang nằm trong Blacklist. Gỡ khỏi Blacklist (tab Blacklist) nếu muốn theo dõi."}
             channels = load_follows(self._data_dir())
             if key in channels:  # trùng: chỉ rõ là kênh nào (tên anh đã đặt có thể khác hẳn tên kênh)
                 old = channels[key]
-                since = datetime.fromtimestamp(old["added_at"]).strftime(" từ %d/%m/%Y") if old.get("added_at") else ""
+                # strftime trên Windows không nhận chữ có dấu: để chữ "từ" ngoài định dạng ngày
+                since = " từ " + datetime.fromtimestamp(old["added_at"]).strftime("%d/%m/%Y") if old.get("added_at") else ""
                 return {"error": f"Kênh này đã có trong danh sách: \"{old.get('name', '')}\"{since}",
                         "duplicate": {"key": key, "name": old.get("name", ""), "added_at": old.get("added_at", 0)}}
             channels[key] = {"platform": platform, "url": url, "name": str(name or "").strip()[:60] or f"Kênh Douyin …{channel_id[-6:]}",
@@ -2064,11 +2074,13 @@ class Api:
                 return {"error": "Không tìm được kênh, xem Nhật ký ở tab Crawl để biết lý do."}
             results = parse_user_results(line)
             followed = load_follows(self._data_dir())
+            banned = load_follows(self._data_dir(), "blacklist")
             with ThreadPoolExecutor(max_workers=8) as pool:
                 avatars = list(pool.map(lambda r: fetch_image(r["avatar"], THUMB_REFERER["dy"]), results))
             for result, avatar in zip(results, avatars):
                 key = follow_key("dy", result["sec_uid"])  # so theo mã kênh như lúc bấm Theo dõi, không theo link
                 result["followed"] = key in followed
+                result["blacklisted"] = key in banned
                 if result["followed"]:
                     result["followed_key"], result["followed_name"] = key, followed[key].get("name", "")
                 result["avatar_url"] = result["avatar"]  # link gốc, để lưu ảnh đại diện khi bấm Theo dõi
@@ -2080,6 +2092,52 @@ class Api:
             return {"error": f"Tìm kênh thất bại: {e}"}
         finally:
             self._state = "idle"
+
+    def blacklist_channels(self, keys) -> dict:
+        """Đưa các kênh đang theo dõi vào blacklist (đồng thời bỏ theo dõi)."""
+        now = int(time.time())
+        with self._follow_lock:
+            data_dir = self._data_dir()
+            channels, banned = load_follows(data_dir), load_follows(data_dir, "blacklist")
+            for key in set(keys or []) & channels.keys():
+                c = channels.pop(key)
+                banned[key] = {k: c[k] for k in ("platform", "url", "name", "avatar") if c.get(k)} | {"added_at": now}
+            write_follows(data_dir, banned, kind="blacklist")
+            write_follows(data_dir, channels)
+        self._sync_soon()
+        return self.follows()
+
+    def blacklist_add(self, text, name="") -> dict:
+        """Thêm kênh vào blacklist bằng link (kênh chưa theo dõi cũng được)."""
+        try:
+            platform, url, channel_id = parse_channel(text)
+        except ValueError as e:
+            return {"error": str(e)}
+        key = f"{platform}_{safe_key(channel_id)}"
+        with self._follow_lock:
+            data_dir = self._data_dir()
+            banned = load_follows(data_dir, "blacklist")
+            if key in banned:
+                return {"error": "Kênh này đã có trong Blacklist"}
+            channels = load_follows(data_dir)
+            followed = channels.pop(key, None)
+            banned[key] = {"platform": platform, "url": url, "added_at": int(time.time()),
+                           "name": str(name or "").strip()[:60] or (followed or {}).get("name") or f"Kênh Douyin …{channel_id[-6:]}"}
+            if (followed or {}).get("avatar"):
+                banned[key]["avatar"] = followed["avatar"]
+            write_follows(data_dir, banned, kind="blacklist")
+            if followed:
+                write_follows(data_dir, channels)
+        self._sync_soon()
+        return self.follows()
+
+    def unblacklist(self, key) -> dict:
+        with self._follow_lock:
+            banned = load_follows(self._data_dir(), "blacklist")
+            banned.pop(key, None)
+            write_follows(self._data_dir(), banned, kind="blacklist")
+        self._sync_soon()
+        return self.follows()
 
     def unfollow(self, key) -> dict:
         with self._follow_lock:
@@ -2377,7 +2435,7 @@ class Api:
             with self._follow_lock:
                 data_dir = self._data_dir()
                 tag = re.sub(r"\W", "_", old.get("user_id") or old.get("email") or "cu")[:40]
-                for path in (follows_file(data_dir), deleted_file(data_dir)):
+                for path in [p for kind in SYNC_KINDS for p in (follows_file(data_dir, kind), deleted_file(data_dir, kind))]:
                     if path.exists():
                         path.replace(path.with_name(f"{path.stem}.{tag}.bak.json"))
             self._write(f"Đổi tài khoản: đã cất danh sách kênh của tài khoản trước ({old.get('email', '')}).")
@@ -2463,18 +2521,35 @@ class Api:
                 url, key = SUPABASE["url"], SUPABASE["key"]
                 token = self._sync_token(s)
                 refreshing = False
-                rows = supabase_call(url, key, "/rest/v1/follows?select=key,data,deleted,updated", token=token)
-                with self._follow_lock:
-                    data_dir = self._data_dir()
-                    before = load_follows(data_dir)
-                    channels, gone, push = merge_follows(before, load_deleted(data_dir), rows or [])
-                    write_follows(data_dir, channels, touch=False)
-                    write_json(deleted_file(data_dir), gone)
-                if push:
-                    supabase_call(url, key, "/rest/v1/follows?on_conflict=user_id,key", "POST", push, token,
-                                  {"Prefer": "resolution=merge-duplicates,return=minimal"})
-                if channels != before:
-                    self._lib_rev += 1
+                for kind in SYNC_KINDS:
+                    try:
+                        rows = supabase_call(url, key, f"/rest/v1/{kind}?select=key,data,deleted,updated", token=token)
+                    except urllib.error.HTTPError as e:
+                        if kind == "follows" or e.code != 404:
+                            raise
+                        # máy chủ chưa có bảng blacklist (chủ app chưa chạy SQL mới): blacklist chỉ lưu trên máy này
+                        if kind not in self._sync_missing:
+                            self._sync_missing.add(kind)
+                            self._write(f"[CẢNH BÁO] Máy chủ đồng bộ chưa có bảng {kind}: phần này chỉ lưu trên máy này.")
+                        continue
+                    with self._follow_lock:
+                        data_dir = self._data_dir()
+                        before = load_follows(data_dir, kind)
+                        channels, gone, push = merge_follows(before, load_deleted(data_dir, kind), rows or [])
+                        if kind == "follows":  # kênh đã vào blacklist (vd. ở máy khác) thì bỏ theo dõi
+                            now = int(time.time() * 1000)
+                            for k in load_follows(data_dir, "blacklist").keys() & channels.keys():
+                                channels.pop(k)
+                                gone[k] = now
+                                push = [r for r in push if r["key"] != k] + [
+                                    {"key": k, "data": {}, "deleted": True, "updated": now}]
+                        write_follows(data_dir, channels, touch=False, kind=kind)
+                        write_json(deleted_file(data_dir, kind), gone)
+                    if push:
+                        supabase_call(url, key, f"/rest/v1/{kind}?on_conflict=user_id,key", "POST", push, token,
+                                      {"Prefer": "resolution=merge-duplicates,return=minimal"})
+                    if channels != before:
+                        self._lib_rev += 1
                 s.update(last_sync=int(time.time()), error="")
             except urllib.error.HTTPError as e:
                 msg = supabase_error(e)
